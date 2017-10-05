@@ -1,0 +1,56 @@
+# Lammps Input File Created for CG runs
+variable        output_freq string 100
+variable        input string kunjin_init_sequence
+variable        output string equil.iterNUM
+
+units           real
+atom_style      full
+
+
+#pair_style      lj/cut 20.0 
+pair_style      lj/cut/coul/debye 0.1 10.0 10.0
+dielectric      80.0
+bond_style      table linear 96
+angle_style     table linear 91
+dihedral_style  table linear 181
+improper_style  none
+
+boundary        s s s 
+#region sbound sphere 0.00 0.00 0.00 400.000 units box side in
+read_data       ${input}.lammpstop
+include         ${input}.lammpspar
+#read_restart       restart2.${output}
+
+#setup neighbor calculations
+neighbor        8.0    bin
+neigh_modify    every 2 delay 0 check no
+special_bonds coul 0.0 0.0 0.0 lj 0.0 0.0 1.0
+
+velocity all create 310.0 4928459 rot yes dist gaussian
+
+
+#format log file output
+thermo_style    custom step temp etotal pe ecoul evdwl ebond eangle lx ly lz press
+thermo          1000
+#fix wall all wall/region sbound lj93 0.1 1.0 2.5
+
+restart     10000  ${output}.rst1 ${output}.rst2
+
+#minimize first
+minimize 1e-14 1.0e-12 100000 1000000
+
+dump             2 all dcd 1000 ${output}.out.dcd
+#dump            6 all xtc  1000 cgall.xtc
+
+dump_modify     2 sort id
+#dump_modify     6 sort id
+
+
+timestep  2.0
+#run langevin dynamics
+fix cg_langevin all langevin 310.0 310.0 100.0 699483
+fix cg_nve all nve
+run  100000
+unfix cg_langevin
+unfix cg_nve
+
