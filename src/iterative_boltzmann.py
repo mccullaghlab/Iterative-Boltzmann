@@ -22,9 +22,14 @@ dih_thresh = 1E-3 # this will make it pretty smooth
 degrees_to_radians = 3.1415926535/180.0
 # read the configuration file and populate the global variables
 def ParseConfigFile(cfg_file):
-	global top_file, sim_in_file, atom_data_root, ib_lambda, n_iter, param_out_file, kT, n_start
+	global top_file, atom_data_root, ib_lambda, n_bond_iter, n_angle_iter, n_dih_iter, lammpspar_file, kT, n_start, bond_delta, dihedral_delta, angle_delta, lammpstop_file, equil_steps, run_steps, temperature
 	f = open(cfg_file)
         n_start = 0
+        bond_delta = angle_delta = dihedral_delta = 0.0
+        # default values
+        equil_steps = 100000
+        run_steps = 500000
+        temperature = 300.0
 	for line in f:
 		# first remove comments
 		if '#' in line:
@@ -37,24 +42,44 @@ def ParseConfigFile(cfg_file):
 			if option.lower()=='topfile':
 				top_file = value
 			elif option.lower()=='paramfile':
-				param_out_file = value
-			elif option.lower()=='siminfile':
-				sim_in_file = value
+				lammpspar_file = value
+			elif option.lower()=='lammpstopfile':
+				lammpstop_file = value
 			elif option.lower()=='atomisticdata':
 				atom_data_root = value
 			elif option.lower()=='lambda':
 				ib_lambda = float(value)
-			elif option.lower()=='iterations':
-				n_iter = int(value)
+			elif option.lower()=='bonditerations':
+				n_bond_iter = int(value)
+			elif option.lower()=='equilsteps':
+				equil_steps = int(value)
+			elif option.lower()=='runsteps':
+				run_steps = int(value)
+			elif option.lower()=='bonddelta':
+				bond_delta = float(value)
+			elif option.lower()=='angleiterations':
+				n_angle_iter = int(value)
+			elif option.lower()=='angledelta':
+				angle_delta = float(value)
+			elif option.lower()=='dihiterations':
+				n_dih_iter = int(value)
+			elif option.lower()=='dihdedraldelta':
+				dihdedral_delta = float(value)
 			elif option.lower()=='restartnum':
 				n_start = int(value)
 			elif option.lower()=='temperature':
-				T = float(value)
+				temperature = float(value)
 			else :
 				print "Option:", option, " is not recognized"
 	f.close()
-	kT = kB*T
-        n_iter = n_start + n_iter
+	kT = kB*temperature
+        # assign default values if unassigned
+        if dihedral_delta == 0.0:
+            dihedral_delta = 1.0
+        if bond_delta == 0.0:
+            bond_delta = 0.1
+        if angle_delta == 0.0:
+            angle_delta = 1.0
 # MMMMMMMM
 
 def ParsePsfFile(psf_file):
@@ -93,12 +118,26 @@ def ParsePsfFile(psf_file):
 				bonds[bond].append(line[line_bond*16+8:line_bond*16+16])
 				same = "false"
 				if bond > 0:
-					for bond2 in range(bond):
-						if (atom_types[int(bonds[bond][0])-1] == atom_types[int(bonds[bond2][0])-1] and atom_types[int(bonds[bond][1])-1] == atom_types[int(bonds[bond2][1])-1]) or (atom_types[int(bonds[bond][0])-1] == atom_types[int(bonds[bond2][1])-1] and atom_types[int(bonds[bond][1])-1] == atom_types[int(bonds[bond2][0])-1]):
+					for bond2 in range(n_uniq_bonds):
+		                                # check to see if the opposite strand parameters also exist and add to histogram
+		                                if uniq_bond_atom_types[bond2][0][1] == "1":
+			                            type1 = uniq_bond_atom_types[bond2][0][0] + str(2)
+		                                else:
+			                            type1 = uniq_bond_atom_types[bond2][0][0] + str(1)
+		                                if uniq_bond_atom_types[bond2][1][1] == "1":
+			                            type2 = uniq_bond_atom_types[bond2][1][0] + str(2)
+		                                else:
+			                            type2 = uniq_bond_atom_types[bond2][1][0] + str(1)
+                                                # check if we already have this bond
+						if (atom_types[int(bonds[bond][0])-1] == uniq_bond_atom_types[bond2][0] and atom_types[int(bonds[bond][1])-1] == uniq_bond_atom_types[bond2][1]) or (atom_types[int(bonds[bond][0])-1] == uniq_bond_atom_types[bond2][1] and atom_types[int(bonds[bond][1])-1] == uniq_bond_atom_types[bond2][0]):
 							same = "true"
-							uniq_bond_num = bonds[bond2][2]
+							uniq_bond_num = bond2
 							break
-				if same == "false":
+						elif (atom_types[int(bonds[bond][0])-1] == type1 and atom_types[int(bonds[bond][1])-1] == type2) or (atom_types[int(bonds[bond][0])-1] == type2 and atom_types[int(bonds[bond][1])-1] == type1):
+							same = "true"
+							uniq_bond_num = bond2
+							break
+		                if same == "false":
 					uniq_bond_atom_types.append([])
 					uniq_bond_atom_types[n_uniq_bonds].append(atom_types[int(bonds[bond][0])-1])
 					uniq_bond_atom_types[n_uniq_bonds].append(atom_types[int(bonds[bond][1])-1])
@@ -117,10 +156,27 @@ def ParsePsfFile(psf_file):
 				angles[angle].append(line[line_angle*24+16:line_angle*24+24])
 				same = "false"
 				if angle > 0:
-					for angle2 in range(angle):
-						if (atom_types[int(angles[angle][0])-1] == atom_types[int(angles[angle2][0])-1] and atom_types[int(angles[angle][1])-1] == atom_types[int(angles[angle2][1])-1] and atom_types[int(angles[angle][2])-1] == atom_types[int(angles[angle2][2])-1]) or (atom_types[int(angles[angle][0])-1] == atom_types[int(angles[angle2][2])-1] and atom_types[int(angles[angle][1])-1] == atom_types[int(angles[angle2][1])-1] and atom_types[int(angles[angle][2])-1] == atom_types[int(angles[angle2][0])-1]):
+					for angle2 in range(n_uniq_angles):
+		                                # check to see if the opposite strand parameters also exist and add to histogram
+		                                if uniq_angle_atom_types[angle2][0][1] == "1":
+			                            type1 = uniq_angle_atom_types[angle2][0][0] + str(2)
+		                                else:
+			                            type1 = uniq_angle_atom_types[angle2][0][0] + str(1)
+		                                if uniq_angle_atom_types[angle2][1][1] == "1":
+			                            type2 = uniq_angle_atom_types[angle2][1][0] + str(2)
+		                                else:
+			                            type2 = uniq_angle_atom_types[angle2][1][0] + str(1)
+		                                if uniq_angle_atom_types[angle2][2][1] == "1":
+			                            type3 = uniq_angle_atom_types[angle2][2][0] + str(2)
+		                                else:
+			                            type3 = uniq_angle_atom_types[angle2][2][0] + str(1)
+						if (atom_types[int(angles[angle][0])-1] == uniq_angle_atom_types[angle2][0] and atom_types[int(angles[angle][1])-1] == uniq_angle_atom_types[angle2][1] and atom_types[int(angles[angle][2])-1] == uniq_angle_atom_types[angle2][2]) or (atom_types[int(angles[angle][0])-1] == uniq_angle_atom_types[angle2][2] and atom_types[int(angles[angle][1])-1] == uniq_angle_atom_types[angle2][1] and atom_types[int(angles[angle][2])-1] == uniq_angle_atom_types[angle2][0]):
 							same = "true"
-							uniq_angle_num = angles[angle2][3]
+							uniq_angle_num = angle2
+							break
+						elif (atom_types[int(angles[angle][0])-1] == type1 and atom_types[int(angles[angle][1])-1] == type2 and atom_types[int(angles[angle][2])-1] == type3) or (atom_types[int(angles[angle][0])-1] == type3 and atom_types[int(angles[angle][1])-1] == type2 and atom_types[int(angles[angle][2])-1] == type1):
+							same = "true"
+							uniq_angle_num = angle2
 							break
 				if same == "false":
 					uniq_angle_atom_types.append([])
@@ -142,10 +198,31 @@ def ParsePsfFile(psf_file):
 				dihedrals[dihedral].append(line[line_dihedral*32+24:line_dihedral*32+32])
 				same = "false"
 				if dihedral > 0:
-					for dihedral2 in range(dihedral):
-						if (atom_types[int(dihedrals[dihedral][0])-1] == atom_types[int(dihedrals[dihedral2][0])-1] and atom_types[int(dihedrals[dihedral][1])-1] == atom_types[int(dihedrals[dihedral2][1])-1] and atom_types[int(dihedrals[dihedral][2])-1] == atom_types[int(dihedrals[dihedral2][2])-1] and atom_types[int(dihedrals[dihedral][3])-1] == atom_types[int(dihedrals[dihedral2][3])-1]) or (atom_types[int(dihedrals[dihedral][0])-1] == atom_types[int(dihedrals[dihedral2][3])-1] and atom_types[int(dihedrals[dihedral][1])-1] == atom_types[int(dihedrals[dihedral2][2])-1] and atom_types[int(dihedrals[dihedral][2])-1] == atom_types[int(dihedrals[dihedral2][1])-1] and atom_types[int(dihedrals[dihedral][3])-1] == atom_types[int(dihedrals[dihedral2][0])-1]):
+					for dihedral2 in range(n_uniq_dihedrals):
+		                                # check to see if opposite signed strands exist and add to current histogram
+		                                if uniq_dihedral_atom_types[dihedral2][0][1] == "1":
+			                            type1 = uniq_dihedral_atom_types[dihedral2][0][0] + str(2)
+		                                else:
+			                            type1 = uniq_dihedral_atom_types[dihedral2][0][0] + str(1)
+		                                if uniq_dihedral_atom_types[dihedral2][1][1] == "1":
+			                            type2 = uniq_dihedral_atom_types[dihedral2][1][0] + str(2)
+		                                else:
+			                            type2 = uniq_dihedral_atom_types[dihedral2][1][0] + str(1)
+		                                if uniq_dihedral_atom_types[dihedral2][2][1] == "1":
+			                            type3 = uniq_dihedral_atom_types[dihedral2][2][0] + str(2)
+		                                else:
+			                            type3 = uniq_dihedral_atom_types[dihedral2][2][0] + str(1)
+		                                if uniq_dihedral_atom_types[dihedral2][3][1] == "1":
+			                            type4 = uniq_dihedral_atom_types[dihedral2][3][0] + str(2)
+		                                else:
+			                            type4 = uniq_dihedral_atom_types[dihedral2][3][0] + str(1)
+						if (atom_types[int(dihedrals[dihedral][0])-1] == uniq_dihedral_atom_types[dihedral2][0] and atom_types[int(dihedrals[dihedral][1])-1] == uniq_dihedral_atom_types[dihedral2][1] and atom_types[int(dihedrals[dihedral][2])-1] == uniq_dihedral_atom_types[dihedral2][2] and atom_types[int(dihedrals[dihedral][3])-1] == uniq_dihedral_atom_types[dihedral2][3]) or (atom_types[int(dihedrals[dihedral][0])-1] == uniq_dihedral_atom_types[dihedral2][3] and atom_types[int(dihedrals[dihedral][1])-1] == uniq_dihedral_atom_types[dihedral2][2] and atom_types[int(dihedrals[dihedral][2])-1] == uniq_dihedral_atom_types[dihedral2][1] and atom_types[int(dihedrals[dihedral][3])-1] == uniq_dihedral_atom_types[dihedral2][0]):
 							same = "true"
-							uniq_dihedral_num = dihedrals[dihedral2][4]
+							uniq_dihedral_num = dihedral2
+							break
+						elif (atom_types[int(dihedrals[dihedral][0])-1] == type1 and atom_types[int(dihedrals[dihedral][1])-1] == type2 and atom_types[int(dihedrals[dihedral][2])-1] == type3 and atom_types[int(dihedrals[dihedral][3])-1] == type4) or (atom_types[int(dihedrals[dihedral][0])-1] == type4 and atom_types[int(dihedrals[dihedral][1])-1] == type3 and atom_types[int(dihedrals[dihedral][2])-1] == type2 and atom_types[int(dihedrals[dihedral][3])-1] == type1):
+							same = "true"
+							uniq_dihedral_num = dihedral2
 							break
 				if same == "false":
 					uniq_dihedral_atom_types.append([])
@@ -210,9 +287,9 @@ def ReadBondHists(bond_hists, bond_min, bond_delta, uniq_bond_atom_types):
         # these are the histogram details for the input files
         input_bond_min = 0.0
         input_bond_max = 24.0
-        input_bond_delta = 0.25
+        input_bond_delta = 0.1
         input_bond_bins  = int((input_bond_max-input_bond_min)/input_bond_delta)
-        input_bond_hists = np.empty((n_bonds, input_bond_bins),dtype=float)
+        input_bond_hists = np.zeros((n_bonds, input_bond_bins),dtype=float)
         input_x_mat = np.empty(input_bond_bins,dtype=float)
         #
         for i in range(n_bins):
@@ -240,37 +317,37 @@ def ReadBondHists(bond_hists, bond_min, bond_delta, uniq_bond_atom_types):
 				input_bond_hists[bond,count] += float(val)
 				count += 1
 			inp.close()
-		else :
-			if uniq_bond_atom_types[bond][0][1] == "1":
-				type1 = uniq_bond_atom_types[bond][0][0] + str(2)
-			else:
-				type1 = uniq_bond_atom_types[bond][0][0] + str(1)
-			if uniq_bond_atom_types[bond][1][1] == "1":
-				type2 = uniq_bond_atom_types[bond][1][0] + str(2)
-			else:
-				type2 = uniq_bond_atom_types[bond][1][0] + str(1)
-			filename = atom_data_root+"/bonds/"+type1+"_"+type2+".hist"
-			filename2 = atom_data_root+"/bonds/"+type2+"_"+type1+".hist"
-			if os.path.isfile(filename):
-				inp = open(filename,'r')
-				count = 0
-				for line in inp:
-					junk, val = line.split()
-					input_bond_hists[bond,count] = float(val)
-					count += 1
-				inp.close()
-			elif os.path.isfile(filename2):
-				filename = filename2
-				inp = open(filename,'r')
-				count = 0
-				for line in inp:
-					junk, val = line.split()
-					input_bond_hists[bond,count] = float(val)
-					count += 1
-				inp.close()
-			else:
-				print "Did not find prameters for:", uniq_bond_atom_types[bond]
-				sys.exit()
+		# check to see if the opposite strand parameters also exist and add to histogram
+		if uniq_bond_atom_types[bond][0][1] == "1":
+			type1 = uniq_bond_atom_types[bond][0][0] + str(2)
+		else:
+			type1 = uniq_bond_atom_types[bond][0][0] + str(1)
+		if uniq_bond_atom_types[bond][1][1] == "1":
+			type2 = uniq_bond_atom_types[bond][1][0] + str(2)
+		else:
+			type2 = uniq_bond_atom_types[bond][1][0] + str(1)
+		filename = atom_data_root+"/bonds/"+type1+"_"+type2+".hist"
+		filename2 = atom_data_root+"/bonds/"+type2+"_"+type1+".hist"
+		if os.path.isfile(filename):
+			inp = open(filename,'r')
+			count = 0
+			for line in inp:
+				junk, val = line.split()
+				input_bond_hists[bond,count] += float(val)
+				count += 1
+			inp.close()
+		elif os.path.isfile(filename2):
+			filename = filename2
+			inp = open(filename,'r')
+			count = 0
+			for line in inp:
+				junk, val = line.split()
+				input_bond_hists[bond,count] += float(val)
+				count += 1
+			inp.close()
+                if np.sum(input_bond_hists[bond,:]) == 0.0:
+			print "Did not find prameters for:", uniq_bond_atom_types[bond]
+			sys.exit()
                 # interpolate so that we can make grid spacing arbitrary
                 tck = interpolate.splrep(input_x_mat,input_bond_hists[bond,:])
                 bond_hists[bond,:] = interpolate.splev(x_mat,tck,der=0)
@@ -284,9 +361,9 @@ def ReadAngleHists(angle_hists, angle_min, angle_delta, uniq_angle_atom_types):
         # these are the histogram details for the input files
         input_angle_min = 0.0
         input_angle_max = 180.0
-        input_angle_delta = 2.0
+        input_angle_delta = 1.0
         input_angle_bins  = int((input_angle_max-input_angle_min)/input_angle_delta)+1
-        input_angle_hists = np.empty((n_angles, input_angle_bins),dtype=float)
+        input_angle_hists = np.zeros((n_angles, input_angle_bins),dtype=float)
         input_x_mat = np.empty(input_angle_bins,dtype=float)
         #
         for i in range(n_bins):
@@ -315,41 +392,41 @@ def ReadAngleHists(angle_hists, angle_min, angle_delta, uniq_angle_atom_types):
 				input_angle_hists[angle,count] = float(val)
 				count += 1
 			inp.close()
-		else :
-			if uniq_angle_atom_types[angle][0][1] == "1":
-				type1 = uniq_angle_atom_types[angle][0][0] + str(2)
-			else:
-				type1 = uniq_angle_atom_types[angle][0][0] + str(1)
-			if uniq_angle_atom_types[angle][1][1] == "1":
-				type2 = uniq_angle_atom_types[angle][1][0] + str(2)
-			else:
-				type2 = uniq_angle_atom_types[angle][1][0] + str(1)
-			if uniq_angle_atom_types[angle][2][1] == "1":
-				type3 = uniq_angle_atom_types[angle][2][0] + str(2)
-			else:
-				type3 = uniq_angle_atom_types[angle][2][0] + str(1)
-			filename = atom_data_root+"/angs/"+type1+"_"+type2+"_"+type3+".hist"
-			filename2 = atom_data_root+"/angs/"+type3+"_"+type2+"_"+type1+".hist"
-			if os.path.isfile(filename):
-				inp = open(filename,'r')
-				count = 0
-				for line in inp:
-					junk, val = line.split()
-					input_angle_hists[angle,count] = float(val)
-					count += 1
-				inp.close()
-			elif os.path.isfile(filename2):
-				filename = filename2
-				inp = open(filename,'r')
-				count = 0
-				for line in inp:
-					junk, val = line.split()
-					input_angle_hists[angle,count] = float(val)
-					count += 1
-				inp.close()
-			else:
-				print "Did not find data for angle", uniq_angle_atom_types[angle]
-				sys.exit()
+		# check to see if opposite strand file exists and add to current histogram
+		if uniq_angle_atom_types[angle][0][1] == "1":
+			type1 = uniq_angle_atom_types[angle][0][0] + str(2)
+		else:
+			type1 = uniq_angle_atom_types[angle][0][0] + str(1)
+		if uniq_angle_atom_types[angle][1][1] == "1":
+			type2 = uniq_angle_atom_types[angle][1][0] + str(2)
+		else:
+			type2 = uniq_angle_atom_types[angle][1][0] + str(1)
+		if uniq_angle_atom_types[angle][2][1] == "1":
+			type3 = uniq_angle_atom_types[angle][2][0] + str(2)
+		else:
+			type3 = uniq_angle_atom_types[angle][2][0] + str(1)
+		filename = atom_data_root+"/angs/"+type1+"_"+type2+"_"+type3+".hist"
+		filename2 = atom_data_root+"/angs/"+type3+"_"+type2+"_"+type1+".hist"
+		if os.path.isfile(filename):
+			inp = open(filename,'r')
+			count = 0
+			for line in inp:
+				junk, val = line.split()
+				input_angle_hists[angle,count] += float(val)
+				count += 1
+			inp.close()
+		elif os.path.isfile(filename2):
+			filename = filename2
+			inp = open(filename,'r')
+			count = 0
+			for line in inp:
+				junk, val = line.split()
+				input_angle_hists[angle,count] += float(val)
+				count += 1
+			inp.close()
+                if np.sum(input_angle_hists[angle,:]) == 0.0:
+			print "Did not find data for angle", uniq_angle_atom_types[angle]
+			sys.exit()
                 # interpolate so that we can make grid spacing arbitrary
                 tck = interpolate.splrep(input_x_mat,input_angle_hists[angle,:])
                 angle_hists[angle,:] = interpolate.splev(x_mat,tck,der=0)
@@ -462,7 +539,7 @@ def AnalyzeCGTraj(top_file, traj_file, cg_bond_potentials, cg_bond_start_stop, c
         CreateDihedralPotentials(cg_dihedral_hists, cg_dihedral_start_stop, cg_dihedral_potentials, cg_dihedral_forces, dihedral_min, dihedral_delta, ib_iter)
 
 def ReadAtomHists(atom_bond_potentials, atom_bond_start_stop, atom_angle_potentials, atom_angle_start_stop, atom_dihedral_potentials, atom_dihedral_start_stop):
-	global n_uniq_bonds, n_bond_bins, bond_min, bond_delta, uniq_bond_atom_types, n_uniq_angles, n_angle_bins, angle_min, angle_delta, uniq_angle_atom_types, n_uniq_dihedrals, n_dihedral_bins, dihedral_min, dihedral_delta, uniq_dihedral_atom_types, param_out_file
+	global n_uniq_bonds, n_bond_bins, bond_min, bond_delta, uniq_bond_atom_types, n_uniq_angles, n_angle_bins, angle_min, angle_delta, uniq_angle_atom_types, n_uniq_dihedrals, n_dihedral_bins, dihedral_min, dihedral_delta, uniq_dihedral_atom_types, lammpspar_file
         # allocate hist and force arrays
         atom_bond_hists = np.zeros((n_uniq_bonds,n_bond_bins),dtype=float) 
         atom_bond_forces = np.zeros((n_uniq_bonds,n_bond_bins),dtype=float) 
@@ -475,7 +552,7 @@ def ReadAtomHists(atom_bond_potentials, atom_bond_start_stop, atom_angle_potenti
 	ReadAngleHists(atom_angle_hists, angle_min, angle_delta, uniq_angle_atom_types)
 	ReadDihedralHists(atom_dihedral_hists, dihedral_min, dihedral_delta, uniq_dihedral_atom_types)
         # write param file
-	param_out = open(param_out_file, 'w')
+	param_out = open(lammpspar_file, 'w')
         for bond in range(n_uniq_bonds):
 		param_out.write("bond_coeff %2d %s BOND_%s\n" %(bond+1, "bonds.ib", str(bond+1).strip()))
         for angle in range(n_uniq_angles):
@@ -499,7 +576,7 @@ def ReadAtomHists(atom_bond_potentials, atom_bond_start_stop, atom_angle_potenti
 # average bond distance histograms (convert them to probability densities)
 def CreateBondPotentials(bond_hists, bond_start_stop, bond_potentials, bond_forces, bond_min, bond_delta, ib_iter):
 	global kT
-
+        fit_size = max(3,int(0.2/bond_delta))
 	n_bonds = bond_hists.shape[0]
 	n_bins = bond_hists.shape[1]
 	coeff_mat = np.empty((n_bins,3),dtype=float)
@@ -524,30 +601,37 @@ def CreateBondPotentials(bond_hists, bond_start_stop, bond_potentials, bond_forc
                         x2 = x*x
 			if bond_hists[bond,i]/x2 > thresh :  # 1E-3 seems to work pretty well here
 				bond_potentials[bond,i] = -kT*math.log(bond_hists[bond,i]/x2)
+                        else:
+                                bond_potentials[bond,i] = 0.0
 
                 # find start
                 for i in range (n_bins):
                         if bond_potentials[bond,i] > thresh:
 				start = i
                                 break
+                        else:
+                            bond_potentials[bond,i] = 0.0
                 # find stop
                 for i in range(n_bins-1,-1,-1):
 			if bond_potentials[bond,i] > thresh:
 				stop = i + 1 # because python is non-inclusive of upperbound
                                 break
-                bond_start_stop[bond,0] = start
-                bond_start_stop[bond,1] = stop
-		# find the minimum energy
-		min_val = np.amin(bond_potentials[bond,start:stop])
+                        else:
+                            bond_potentials[bond,i] = 0.0
 
+                # MM edit
+                # find nonzero indices
+                indice, = bond_potentials[bond,:].nonzero()
+		# find the minimum energy
+		min_val = np.amin(bond_potentials[bond,indice])
 		# now smooth the potential using a cubic spline fit	
-                tck = interpolate.splrep(coeff_mat[start:stop,1],bond_potentials[bond,start:stop]-min_val)
+                tck = interpolate.splrep(coeff_mat[indice,1],bond_potentials[bond,indice]-min_val)
                 bond_potentials[bond,start:stop] = interpolate.splev(coeff_mat[start:stop,1], tck, der=0)
 
 		# fit previous section if we have enough data
-		if (stop-start) > 4:
+                if (stop-start) > fit_size:
 		    # fit function to parabola to extrapolate to short and long distances
-		    k, rss, rank, sv = np.linalg.lstsq(coeff_mat[start:start+4],bond_potentials[bond,start:start+4])
+		    k, rss, rank, sv = np.linalg.lstsq(coeff_mat[start:start+fit_size],bond_potentials[bond,start:start+fit_size])
                     # check to make sure the potential is increasing
                     if k[2] > 0:
                         # place fit data into potential
@@ -556,19 +640,24 @@ def CreateBondPotentials(bond_hists, bond_start_stop, bond_potentials, bond_forc
                     # keep increasing size of fit region until k[2] > 0
                     else:
                         print "k[2] < 0 for decreasing r of bond ", bond+1, " at iteration", ib_iter
-                        fit_size = 5
-                        while k[2] < 0 and fit_size <= stop-start+1:
+                        while k[2] < 0 and start < stop-fit_size:
 		            k, rss, rank, sv = np.linalg.lstsq(coeff_mat[start:start+fit_size],bond_potentials[bond,start:start+fit_size])
-                            fit_size += 1
-                        if fit_size > stop-start+1:
+                            start += 1
+                        if start >= stop-fit_size:
                             print "ERROR: Cannot fit data to increasing function... BOMBING OUT"
                             sys.exit()
-                        print "k[2] > 0 for decreasing r of bond ", bond+1, " for fit_size=", fit_size
+#                        while k[2] < 0 and fit_size <= stop-start+1:
+#		            k, rss, rank, sv = np.linalg.lstsq(coeff_mat[start:start+fit_size],bond_potentials[bond,start:start+fit_size])
+#                            fit_size += 1
+#                        if fit_size > stop-start+1:
+#                            print "ERROR: Cannot fit data to increasing function... BOMBING OUT"
+#                            sys.exit()
+#                        print "k[2] > 0 for decreasing r of bond ", bond+1, " for fit_size=", fit_size
                         # place fit data into potential
 	    	        for j in range(start):
 		            bond_potentials[bond,j] = k[0]*coeff_mat[j,0] + k[1]*coeff_mat[j,1] + k[2]*coeff_mat[j,2]
 		    # fit function to parabola to extrapolate to short and long distances
-		    k, rss, rank, sv = np.linalg.lstsq(coeff_mat[stop-4:stop],bond_potentials[bond,stop-4:stop])
+		    k, rss, rank, sv = np.linalg.lstsq(coeff_mat[stop-fit_size:stop],bond_potentials[bond,stop-fit_size:stop])
                     # check to make sure the potential is increasing
                     if k[2] > 0:
                         # place fit data into potential
@@ -577,13 +666,19 @@ def CreateBondPotentials(bond_hists, bond_start_stop, bond_potentials, bond_forc
                     # keep increasing fit region until ...
                     else:
                         print "k[2] < 0 for increasing r of bond ", bond+1, " at iteration", ib_iter
-                        fit_size = 5
-                        while k[2] < 0 and fit_size <= stop-start+1:
+                        while k[2] < 0 and stop > start+fit_size:
 		            k, rss, rank, sv = np.linalg.lstsq(coeff_mat[stop-fit_size:stop],bond_potentials[bond,stop-fit_size:stop])
-                            fit_size += 1
-                        if fit_size > stop-start+1:
+                            stop -= 1
+                        if stop <= start+fit_size:
                             print "ERROR: Cannot fit data to increasing function... BOMBING OUT"
-                        print "k[2] > 0 for increasing r of bond ", bond+1, " for fit_size=", fit_size
+                            sys.exit()
+#                        while k[2] < 0 and fit_size <= stop-start+1:
+#		            k, rss, rank, sv = np.linalg.lstsq(coeff_mat[stop-fit_size:stop],bond_potentials[bond,stop-fit_size:stop])
+#                            fit_size += 1
+#                        if fit_size > stop-start+1:
+#                            print "ERROR: Cannot fit data to increasing function... BOMBING OUT"
+#                            sys.exit()
+#                        print "k[2] > 0 for increasing r of bond ", bond+1, " for fit_size=", fit_size
                         # place fit data into potential
 		        for j in range(stop,n_bins):
 			    bond_potentials[bond,j] = k[0]*coeff_mat[j,0] + k[1]*coeff_mat[j,1] + k[2]*coeff_mat[j,2]
@@ -591,6 +686,8 @@ def CreateBondPotentials(bond_hists, bond_start_stop, bond_potentials, bond_forc
                     print "ERROR: Not enough data to fit for bond=", bond, " at iteration ", ib_iter
                     print "Bombing out..."
                     sys.exit()
+                bond_start_stop[bond,0] = start
+                bond_start_stop[bond,1] = stop
 
 		# now smooth the total  potential using a cubic spline fit	
 		tck = interpolate.splrep(coeff_mat[:,1],bond_potentials[bond,:])
@@ -770,11 +867,11 @@ def CreateAnglePotentials(angle_hists, angle_start_stop, angle_potentials, angle
                         if fit_hole == "true":
                                 if (hole_stop - hole_start) > 3:
                                     # make sure legs are sloped appropriately
-                                    while hole_start >= 0 and (angle_forces[angle,hole_start] > 0 or angle_forces[angle,hole_start-1] > 0 or angle_forces[angle,hole_start-2] > 0):
+                                    while hole_start >= 2 and (angle_forces[angle,hole_start] > 0 or angle_forces[angle,hole_start-1] > 0 or angle_forces[angle,hole_start-2] > 0):
                                         hole_start -= 1
-                                    while hole_stop < n_bins and (angle_forces[angle,hole_stop] < 0 or angle_forces[angle,hole_stop+1] < 0 or angle_forces[angle,hole_stop+2] < 0):
+                                    while hole_stop < n_bins-3 and (angle_forces[angle,hole_stop] < 0 or angle_forces[angle,hole_stop+1] < 0 or angle_forces[angle,hole_stop+2] < 0):
                                         hole_stop += 1
-                                    if hole_stop == n_bins or hole_start < 0: # have to bridge
+                                    if hole_stop == n_bins-2 or hole_start < 2: # have to bridge
                                         break
                                     data_y = np.append(angle_potentials[angle,hole_start-3:hole_start],angle_potentials[angle,hole_stop:hole_stop+3])
                                     data_x = np.append(coeff_mat[hole_start-3:hole_start], coeff_mat[hole_stop:hole_stop+3], axis=0)
@@ -946,45 +1043,45 @@ def ReadDihedralHists(dihedral_hists, dihedral_min, delta_dihedral, uniq_dihedra
 				input_dihedral_hists[dihedral,count] += float(val)
 				count += 1
 			inp.close()
+		# check to see if opposite signed strands exist and add to current histogram
+		if uniq_dihedral_atom_types[dihedral][0][1] == "1":
+			type1 = uniq_dihedral_atom_types[dihedral][0][0] + str(2)
 		else:
-			if uniq_dihedral_atom_types[dihedral][0][1] == "1":
-				type1 = uniq_dihedral_atom_types[dihedral][0][0] + str(2)
-			else:
-				type1 = uniq_dihedral_atom_types[dihedral][0][0] + str(1)
-			if uniq_dihedral_atom_types[dihedral][1][1] == "1":
-				type2 = uniq_dihedral_atom_types[dihedral][1][0] + str(2)
-			else:
-				type2 = uniq_dihedral_atom_types[dihedral][1][0] + str(1)
-			if uniq_dihedral_atom_types[dihedral][2][1] == "1":
-				type3 = uniq_dihedral_atom_types[dihedral][2][0] + str(2)
-			else:
-				type3 = uniq_dihedral_atom_types[dihedral][2][0] + str(1)
-			if uniq_dihedral_atom_types[dihedral][3][1] == "1":
-				type4 = uniq_dihedral_atom_types[dihedral][3][0] + str(2)
-			else:
-				type4 = uniq_dihedral_atom_types[dihedral][3][0] + str(1)
-			filename = atom_data_root+"/dihs/"+type1+"_"+type2+"_"+type3+"_"+type4+".hist"
-			filename2 = atom_data_root+"/dihs/"+type4+"_"+type3+"_"+type2+"_"+type1+".hist"
-			if os.path.isfile(filename):
-				inp = open(filename,'r')
-				count = 0
-				for line in inp:
-					junk, val = line.split()
-					input_dihedral_hists[dihedral,count] = float(val)
-					count += 1
-				inp.close()
-			elif os.path.isfile(filename2):
-				filename = filename2
-				inp = open(filename,'r')
-				count = 0
-				for line in inp:
-					junk, val = line.split()
-					input_dihedral_hists[dihedral,count] = float(val)
-					count += 1
-				inp.close()
-			else:
-				print "Did not find data for dihedral", uniq_dihedral_atom_types[dihedral]
-				sys.exit()
+			type1 = uniq_dihedral_atom_types[dihedral][0][0] + str(1)
+		if uniq_dihedral_atom_types[dihedral][1][1] == "1":
+			type2 = uniq_dihedral_atom_types[dihedral][1][0] + str(2)
+		else:
+			type2 = uniq_dihedral_atom_types[dihedral][1][0] + str(1)
+		if uniq_dihedral_atom_types[dihedral][2][1] == "1":
+			type3 = uniq_dihedral_atom_types[dihedral][2][0] + str(2)
+		else:
+			type3 = uniq_dihedral_atom_types[dihedral][2][0] + str(1)
+		if uniq_dihedral_atom_types[dihedral][3][1] == "1":
+			type4 = uniq_dihedral_atom_types[dihedral][3][0] + str(2)
+		else:
+			type4 = uniq_dihedral_atom_types[dihedral][3][0] + str(1)
+		filename = atom_data_root+"/dihs/"+type1+"_"+type2+"_"+type3+"_"+type4+".hist"
+		filename2 = atom_data_root+"/dihs/"+type4+"_"+type3+"_"+type2+"_"+type1+".hist"
+		if os.path.isfile(filename):
+			inp = open(filename,'r')
+			count = 0
+			for line in inp:
+				junk, val = line.split()
+				input_dihedral_hists[dihedral,count] += float(val)
+				count += 1
+			inp.close()
+		elif os.path.isfile(filename2):
+			filename = filename2
+			inp = open(filename,'r')
+			count = 0
+			for line in inp:
+				junk, val = line.split()
+				input_dihedral_hists[dihedral,count] += float(val)
+				count += 1
+			inp.close()
+                if np.sum(input_dihedral_hists[dihedral,:]) == 0.0:
+			print "Did not find data for dihedral", uniq_dihedral_atom_types[dihedral]
+			sys.exit()
                 # normalize
                 input_dihedral_hists[dihedral,:] /= (np.sum(input_dihedral_hists[dihedral,:])*input_dihedral_delta)
                 # interpolate so that we can make grid spacing arbitrary
@@ -1235,7 +1332,7 @@ def UpdateBonds(ib_iter, atom_bond_potentials, atom_bond_start_stop, prev_cg_bon
             for i in range(current_min,current_max):
 	        cg_bond_potential_temp[i] = prev_cg_bond_potentials[bond,i] + ib_lambda * (atom_bond_potentials[bond,i] - cg_bond_potentials[bond,i])
             # now add asymptotic behavior and smooth 
-            CheckAsymptoticBehavior(cg_bond_potential_temp,cg_bond_forces[bond,:],x_mat,current_min,current_max)
+            CheckAsymptoticBehavior(cg_bond_potential_temp,cg_bond_forces[bond,:],x_mat,current_min,current_max, bond)
             cg_bond_potentials[bond,:] = cg_bond_potential_temp[:] 
             cg_bond_start_stop[bond,0] = current_min
             cg_bond_start_stop[bond,1] = current_max
@@ -1243,11 +1340,14 @@ def UpdateBonds(ib_iter, atom_bond_potentials, atom_bond_start_stop, prev_cg_bon
         WriteBondPotentials(cg_bond_potentials,cg_bond_forces,cg_bond_start_stop, bond_min, bond_delta,ib_out,ener_out,start_stop_out)
 
 # routine to check potential is behaving appropriately in asymptotic limits and correct if not
-def CheckAsymptoticBehavior(potential,force,x,start,stop):
-
+def CheckAsymptoticBehavior(potential,force,x,start,stop, bond):
+#        fit_size = 15
+        fit_size = max(3,int(0.2/bond_delta))
 	n_bins = potential.shape[0]
 	coeff_mat = np.empty((n_bins,3),dtype=float)
-
+        # smooth the potential
+        tck = interpolate.splrep(x[start:stop],potential[start:stop])
+        potential[start:stop] = interpolate.splev(x[start:stop], tck, der=0)
         # make coefficient matrix
 	for i in range(n_bins):
 		coeff_mat[i,0] = 1.0
@@ -1257,7 +1357,7 @@ def CheckAsymptoticBehavior(potential,force,x,start,stop):
 	# fit beginning section if necessary
         if start > 0:
 	    # fit function to parabola to extrapolate to short and long distances
-            k, rss, rank, sv = np.linalg.lstsq(coeff_mat[start:start+4],potential[start:start+4])
+            k, rss, rank, sv = np.linalg.lstsq(coeff_mat[start:start+fit_size],potential[start:start+fit_size])
             # check to make sure the potential is increasing
             if k[2] > 0:
                 # place fit data into potential
@@ -1265,17 +1365,23 @@ def CheckAsymptoticBehavior(potential,force,x,start,stop):
 	            potential[j] = k[0]*coeff_mat[j,0] + k[1]*coeff_mat[j,1] + k[2]*coeff_mat[j,2]
             # keep increasing size of fit region until k[2] > 0
             else:
-                fit_size = 5
-                while k[2] < 0:
+                while k[2] < 0 and start+fit_size < stop-1:
 	            k, rss, rank, sv = np.linalg.lstsq(coeff_mat[start:start+fit_size],potential[start:start+fit_size])
-                    fit_size += 1
+                    start += 1
+                if start + fit_size >= stop-1:
+                    print "ERROR: Cannot fit small r asymptote  of bond ", bond+1, " to increasing function... BOMBING OUT"
+                    dump = open("temp.dump", "w")
+                    for i in range(start,stop):
+                        dump.write( "%20.5f %20.5f\n" % (x[i], potential[i]))
+                    dump.close()
+                    sys.exit()
                 # place fit data into potential
 	        for j in range(start):
 		    potential[j] = k[0]*coeff_mat[j,0] + k[1]*coeff_mat[j,1] + k[2]*coeff_mat[j,2]
 	# fit end section if necessary
         if stop < n_bins-1:
 	    # fit function to parabola to extrapolate to short and long distances
-	    k, rss, rank, sv = np.linalg.lstsq(coeff_mat[stop-4:stop],potential[stop-4:stop])
+	    k, rss, rank, sv = np.linalg.lstsq(coeff_mat[stop-fit_size:stop],potential[stop-fit_size:stop])
             # check to make sure the potential is increasing
             if k[2] > 0:
                 # place fit data into potential
@@ -1283,10 +1389,12 @@ def CheckAsymptoticBehavior(potential,force,x,start,stop):
 	            potential[j] = k[0]*coeff_mat[j,0] + k[1]*coeff_mat[j,1] + k[2]*coeff_mat[j,2]
             # keep increasing size of fit region until k[2] > 0
             else:
-                fit_size = 5
-                while k[2] < 0:
+                while k[2] < 0 and  stop-fit_size > start:
 	            k, rss, rank, sv = np.linalg.lstsq(coeff_mat[stop-fit_size:stop],potential[stop-fit_size:stop])
-                    fit_size += 1
+                    stop -= 1
+                if stop-fit_size <= start:
+                    print "ERROR: Cannot fit large r asymptote  of bond ", bond+1, " to increasing function... BOMBING OUT"
+                    sys.exit()
                 # place fit data into potential
 	        for j in range(stop, n_bins):
 		    potential[j] = k[0]*coeff_mat[j,0] + k[1]*coeff_mat[j,1] + k[2]*coeff_mat[j,2]
@@ -1307,19 +1415,6 @@ def ReadRestartPotentials(prev_cg_potentials, prev_cg_start_stop, x_min, x_delta
             x_mat[i] = x_min + (i+0.5) * x_delta
         # read potential
 	ener_in = char + str(ib_iter) + ".ener"
-#	pot_in = open(ener_in, 'r')
-#        bin_count = 0
-#        input_cg_potentials = []
-#        input_x_mat = []
-#        for line in pot_in:
-#                input_x_mat.append(line[0:20])
-#                input_cg_potentials.append([])
-#		for potential in range(n_potentials):
-#                    input_cg_potentials[potential].append(line[20*(potential+1):20*(potential+2)])
-#	pot_in.close()
-#        input_cg_potentials = np.asmatrix(input_cg_potentials,dtype=float)
-#        input_x_mat = np.asarray(input_x_mat,dtype=float)
-#
         data = np.loadtxt(ener_in)
         print data.shape
 
@@ -1332,24 +1427,121 @@ def ReadRestartPotentials(prev_cg_potentials, prev_cg_start_stop, x_min, x_delta
         # read potential start stop
 	start_stop_in = char + str(ib_iter) + ".start_stop"
         prev_cg_start_stop[:,:] = np.loadtxt(start_stop_in)
-#	start_stop_file = open(start_stop_in, 'r')
-#        potential_count = 0
-#        start_stop_list = []
-#        for line in start_stop_file:
-#            start_stop_list.append([])
-#            start_stop_list[potential_count].append(line[0:20])
-#            start_stop_list[potential_count].append(line[21:40])
-#            potential_count += 1
-#        start_stop_file.close()
-#        prev_cg_start_stop = np.asmatrix(start_stop_list,dtype=int)
 
 
+# read restart potentials
+def ReadRestartHists(cg_potentials, cg_start_stop, x_min, x_delta, ib_iter, char):
+	n_potentials = cg_potentials.shape[0]
+	n_bins = cg_potentials.shape[1]
+        x_mat = np.empty(n_bins,dtype=float)
+        # populate x values into array
+        for i in range(n_bins):
+            x_mat[i] = x_min + (i+0.5) * x_delta
+        # read hists
+	hist_in = char + str(ib_iter) + "_out.hist"
+        data = np.loadtxt(hist_in)
+        cg_hists = data[:,1:n_potentials].T
+        # read potential start stop
+	start_stop_in = char + str(ib_iter) + ".start_stop"
+        cg_start_stop[:,:] = np.loadtxt(start_stop_in)
+        # create potentials
+        cg_forces = np.empty((n_potentials,n_bins),dtype=float)
+        if char == "bond":
+            CreateBondPotentials(cg_hists, cg_start_stop, cg_potentials, cg_forces, x_min, x_delta, ib_iter)
+            WriteBondPotentials(cg_potentials, cg_forces, cg_start_stop, x_min, x_delta,"bond0_out.ib","bond0_out.ener","bond0_out.start_stop")
+        elif char == "angle":
+            CreateAnglePotentials(cg_hists, cg_start_stop, cg_potentials, cg_forces, x_min, x_delta, ib_iter)
+        elif char == "dihedral":
+            CreateDihedralPotentials(cg_hists, cg_start_stop, cg_potentials, cg_forces, x_min, x_delta, ib_iter)
+
+# create run file for lammps
+def create_run_file(run_file_name, run_steps, lammpstop_file, lammpspar_file, temperature, ib_iter):
+    global  n_bond_bins, n_angle_bins, n_dihedral_bins
+    run_file = open(run_file_name,'w')
+
+    run_file.write("# Lammps Input File Created for CG runs\n")
+    run_file.write("variable        output_freq string 100\n")
+    run_file.write("variable        output string run.iter%s\n" % (str(ib_iter)))
+    run_file.write("units           real\n")
+    run_file.write("atom_style      full\n")
+    run_file.write("pair_style      lj/cut/coul/debye 0.1 10.0 10.0\n")
+    run_file.write("dielectric      80.0\n")
+    run_file.write("bond_style      table linear %d\n" % (n_bond_bins))
+    run_file.write("angle_style     table linear %d\n" % (n_angle_bins))
+    run_file.write("dihedral_style  table linear %d\n" % (n_dihedral_bins))
+    run_file.write("improper_style  none\n")
+    run_file.write("boundary        s s s\n")
+    run_file.write("read_restart       %s\n" % ("equil.iter"+str(ib_iter)+".rst1"))
+    run_file.write("include         %s\n" % (lammpspar_file))
+    run_file.write("#setup neighbor calculations\n")
+    run_file.write("neighbor        8.0    bin\n")
+    run_file.write("neigh_modify    every 2 delay 0 check no\n")
+    run_file.write("special_bonds coul 0.0 0.0 0.0 lj 0.0 0.0 1.0\n")
+    run_file.write("velocity all create %8.3f 4928459 rot yes dist gaussian\n" % (temperature))
+    run_file.write("#format log file output\n")
+    run_file.write("thermo_style    custom step temp etotal pe ecoul evdwl ebond eangle lx ly lz press\n")
+    run_file.write("thermo          1000\n")
+    run_file.write("restart     50000  ${output}.rst1 ${output}.rst2\n")
+    run_file.write("dump             2 all dcd 1000 ${output}.out.dcd\n")
+    run_file.write("dump_modify     2 sort id\n")
+    run_file.write("timestep  5.0\n")
+    run_file.write("#run langevin dynamics\n")
+    run_file.write("fix cg_langevin all langevin %8.3f %8.3f 100.0 699483\n" % (temperature, temperature))
+    run_file.write("fix cg_nve all nve\n")
+    run_file.write("run  %d\n" % (run_steps))
+    run_file.write("unfix cg_langevin\n")
+    run_file.write("unfix cg_nve\n")
+    run_file.close()
+
+# create equilibration file for lammps
+def create_equil_file(equil_file_name, equil_steps, lammpstop_file, lammpspar_file, temperature, ib_iter):
+    global  n_bond_bins, n_angle_bins, n_dihedral_bins
+    equil_file = open(equil_file_name,'w')
+
+    equil_file.write("# Lammps Input File Created for CG runs\n")
+    equil_file.write("variable        output_freq string 100\n")
+    equil_file.write("variable        output string equil.iter%s\n" % (str(ib_iter)))
+    equil_file.write("units           real\n")
+    equil_file.write("atom_style      full\n")
+    equil_file.write("pair_style      lj/cut/coul/debye 0.1 10.0 10.0\n")
+    equil_file.write("dielectric      80.0\n")
+    equil_file.write("bond_style      table linear %d\n" % (n_bond_bins))
+    equil_file.write("angle_style     table linear %d\n" % (n_angle_bins))
+    equil_file.write("dihedral_style  table linear %d\n" % (n_dihedral_bins))
+    equil_file.write("improper_style  none\n")
+    equil_file.write("boundary        s s s\n")
+    equil_file.write("read_data       %s\n" % (lammpstop_file))
+    equil_file.write("include         %s\n" % (lammpspar_file))
+    equil_file.write("#setup neighbor calculations\n")
+    equil_file.write("neighbor        8.0    bin\n")
+    equil_file.write("neigh_modify    every 2 delay 0 check no\n")
+    equil_file.write("special_bonds coul 0.0 0.0 0.0 lj 0.0 0.0 1.0\n")
+    equil_file.write("velocity all create %8.3f 4928459 rot yes dist gaussian\n" % (temperature))
+    equil_file.write("#format log file output\n")
+    equil_file.write("thermo_style    custom step temp etotal pe ecoul evdwl ebond eangle lx ly lz press\n")
+    equil_file.write("thermo          1000\n")
+    equil_file.write("restart     10000  ${output}.rst1 ${output}.rst2\n")
+    equil_file.write("#minimize first\n")
+    equil_file.write("minimize 1e-14 1.0e-12 100000 1000000\n")
+    equil_file.write("dump             2 all dcd 1000 ${output}.out.dcd\n")
+    equil_file.write("dump_modify     2 sort id\n")
+    equil_file.write("timestep  2.0\n")
+    equil_file.write("#run langevin dynamics\n")
+    equil_file.write("fix cg_langevin all langevin %8.3f %8.3f 100.0 699483\n" % (temperature, temperature))
+    equil_file.write("fix cg_nve all nve\n")
+    equil_file.write("run  %d\n" % (equil_steps))
+    equil_file.write("unfix cg_langevin\n")
+    equil_file.write("unfix cg_nve\n")
+    equil_file.close()
 
 # run CG simulation using lammps
 def RunCGSim(ib_iter, equil_in_file, run_in_file):
+        global temperature, equil_steps, run_steps, lammpstop_file, lammpspar_file, n_bond_bins, n_angle_bins, n_dihedral_bins
 	
 	new_equil_file = "equil.iter" + str(ib_iter) + ".in"
+        create_equil_file(new_equil_file, equil_steps, lammpstop_file, lammpspar_file, temperature, ib_iter)
 	new_run_file = "run.iter" + str(ib_iter) + ".in"
+        create_run_file(new_run_file, run_steps, lammpstop_file, lammpspar_file, temperature, ib_iter)
 	equil_log_file = "equil.iter" + str(ib_iter) + ".log"
 	run_log_file = "run.iter" + str(ib_iter) + ".log"
         # copy current ib files to active ib files (read in by TEMPLATE cfg files)
@@ -1358,10 +1550,10 @@ def RunCGSim(ib_iter, equil_in_file, run_in_file):
         command2 = "cp dihedral" + str(ib_iter) + ".ib dihedrals.ib"
         # update equil file and run
 	command3 = "sed -e s/NUM/" + str(ib_iter) + "/ < " + equil_in_file + " > " +  new_equil_file
-	command4 = "mpirun -np 3 lmp_mac_mpi -i " + new_equil_file + " > " + equil_log_file
+	command4 = "mpirun -np 4 lmp_mpi -i " + new_equil_file + " > " + equil_log_file
         # update run file and run
 	command5 = "sed -e s/NUM/" + str(ib_iter) + "/ < " + run_in_file + " > " +  new_run_file
-	command6 = "mpirun -np 3 lmp_mac_mpi -i " + new_run_file + " > " + run_log_file
+	command6 = "mpirun -np 4 lmp_mpi -i " + new_run_file + " > " + run_log_file
 	
 	print command0
 	os.system(command0)
@@ -1369,12 +1561,12 @@ def RunCGSim(ib_iter, equil_in_file, run_in_file):
 	os.system(command1)
 	print command2
 	os.system(command2)
-	print command3
-	os.system(command3)
+#	print command3
+#	os.system(command3)
 	print command4
 	os.system(command4)
-	print command5
-	os.system(command5)
+#	print command5
+#	os.system(command5)
 	print command6
 	os.system(command6)
 	print "Done with CG simulation for iteration", ib_iter
@@ -1405,7 +1597,7 @@ print "Number of unique dihedrals:", n_uniq_dihedrals
 # declare bond, angle and dihedral potentials
 bond_min = 0.0
 bond_max = 24.0
-bond_delta = 0.1 
+#bond_delta = 0.1 
 n_bond_bins  = int((bond_max-bond_min)/bond_delta)
 atom_bond_potentials = np.zeros((n_uniq_bonds,n_bond_bins),dtype=float)
 atom_bond_start_stop = np.empty((n_uniq_bonds,2),dtype=int)
@@ -1416,7 +1608,7 @@ prev_cg_bond_start_stop = np.empty((n_uniq_bonds,2),dtype=int)
 # angles
 angle_min = 0.0
 angle_max = 180 # inclusive
-angle_delta = 1.0 
+#angle_delta = 1.0 
 n_angle_bins  = int((angle_max-angle_min)/angle_delta) + 1
 atom_angle_potentials = np.zeros((n_uniq_angles,n_angle_bins),dtype=float)
 atom_angle_start_stop = np.empty((n_uniq_angles,2),dtype=int)
@@ -1427,7 +1619,7 @@ prev_cg_angle_start_stop = np.empty((n_uniq_angles,2),dtype=int)
 # dihedrals
 dihedral_min = -179.0 
 dihedral_max = 180.0 # inclusive
-dihedral_delta = 1.0
+#dihedral_delta = 1.0
 n_dihedral_bins  = int((dihedral_max-dihedral_min)/dihedral_delta) + 1
 atom_dihedral_potentials = np.zeros((n_uniq_dihedrals,n_dihedral_bins),dtype=float)
 atom_dihedral_start_stop = np.empty((n_uniq_dihedrals,2),dtype=int)
@@ -1457,15 +1649,20 @@ if n_start > 0:
 equil_in_file = "equil.TEMPLATE.in"
 run_in_file = "run.TEMPLATE.in"
 
-delta_iter = n_iter - n_start
+ib_iter = n_start
 # run bond IB
-for ib_iter in range(n_start, n_iter):
+for bond_iter in range(n_bond_iter):
 	traj_file = "run.iter" + str(ib_iter) + ".out.dcd"
     	# run CG simulation
-	RunCGSim(ib_iter, equil_in_file, run_in_file)
-
-	# compute CG probability distributions
+#        if bond_iter > -1:
+        RunCGSim(ib_iter, equil_in_file, run_in_file)
+        # compute CG probability distributions
 	AnalyzeCGTraj(top_file, traj_file,cg_bond_potentials, cg_bond_start_stop, cg_angle_potentials, cg_angle_start_stop, cg_dihedral_potentials, cg_dihedral_start_stop)
+#        else:
+#            ReadRestartHists(cg_bond_potentials, cg_bond_start_stop, bond_min, bond_delta, n_start, "bond")
+#            ReadRestartHists(cg_angle_potentials, cg_angle_start_stop, angle_min, angle_delta, n_start, "angle")
+#            ReadRestartHists(cg_dihedral_potentials, cg_dihedral_start_stop, dihedral_min, dihedral_delta, n_start, "dihedral")
+
 
 	# update potentials
 	UpdateBonds(ib_iter, atom_bond_potentials, atom_bond_start_stop, prev_cg_bond_potentials, prev_cg_bond_start_stop, cg_bond_potentials, cg_bond_start_stop)
@@ -1473,10 +1670,10 @@ for ib_iter in range(n_start, n_iter):
         # update previous potentials
         prev_cg_bond_potentials[:,:] = cg_bond_potentials[:,:]
         prev_cg_bond_start_stop[:,:] = cg_bond_start_stop[:,:]
-        prev_cg_angle_potentials[:,:] = cg_angle_potentials[:,:]
-        prev_cg_angle_start_stop[:,:] = cg_angle_start_stop[:,:]
-        prev_cg_dihedral_potentials[:,:] = cg_dihedral_potentials[:,:]
-        prev_cg_dihedral_start_stop[:,:] = cg_dihedral_start_stop[:,:]
+        cg_angle_potentials[:,:] = prev_cg_angle_potentials[:,:]
+        cg_angle_start_stop[:,:] = prev_cg_angle_start_stop[:,:]
+        cg_dihedral_potentials[:,:] = prev_cg_dihedral_potentials[:,:]
+        cg_dihedral_start_stop[:,:] = prev_cg_dihedral_start_stop[:,:]
         # mv ib files for angles and dihedrals
         command0 = "cp angle" + str(ib_iter) + ".ib angle" + str(ib_iter+1) + ".ib"
 	os.system(command0)
@@ -1490,9 +1687,10 @@ for ib_iter in range(n_start, n_iter):
 	os.system(command0)
         command0 = "cp dihedral" + str(ib_iter) + ".start_stop dihedral" + str(ib_iter+1) + ".start_stop"
 	os.system(command0)
+        ib_iter += 1
 
 # run angle IB
-for ib_iter in range(n_iter, n_iter+delta_iter):
+for angle_iter in range(n_angle_iter):
 	traj_file = "run.iter" + str(ib_iter) + ".out.dcd"
     	# run CG simulation
 	RunCGSim(ib_iter, equil_in_file, run_in_file)
@@ -1504,13 +1702,13 @@ for ib_iter in range(n_iter, n_iter+delta_iter):
 	UpdateAngles(ib_iter, atom_angle_potentials, atom_angle_start_stop, prev_cg_angle_potentials, prev_cg_angle_start_stop, cg_angle_potentials, cg_angle_start_stop)
     
         # update previous potentials
-        prev_cg_bond_potentials[:,:] = cg_bond_potentials[:,:]
-        prev_cg_bond_start_stop[:,:] = cg_bond_start_stop[:,:]
+        cg_bond_potentials[:,:] = prev_cg_bond_potentials[:,:]
+        cg_bond_start_stop[:,:] = prev_cg_bond_start_stop[:,:] 
         prev_cg_angle_potentials[:,:] = cg_angle_potentials[:,:]
         prev_cg_angle_start_stop[:,:] = cg_angle_start_stop[:,:]
-        prev_cg_dihedral_potentials[:,:] = cg_dihedral_potentials[:,:]
-        prev_cg_dihedral_start_stop[:,:] = cg_dihedral_start_stop[:,:]
-        # mv ib files for angles and dihedrals
+        cg_dihedral_potentials[:,:] = prev_cg_dihedral_potentials[:,:]
+        cg_dihedral_start_stop[:,:] = prev_cg_dihedral_start_stop[:,:]
+        # mv ib files for bonds and dihedrals
         command0 = "cp bond" + str(ib_iter) + ".ib bond" + str(ib_iter+1) + ".ib"
 	os.system(command0)
         command0 = "cp bond" + str(ib_iter) + ".ener bond" + str(ib_iter+1) + ".ener"
@@ -1523,10 +1721,11 @@ for ib_iter in range(n_iter, n_iter+delta_iter):
 	os.system(command0)
         command0 = "cp dihedral" + str(ib_iter) + ".start_stop dihedral" + str(ib_iter+1) + ".start_stop"
 	os.system(command0)
+        ib_iter += 1
 
 
 # run dihedral IB
-for ib_iter in range(n_iter+delta_iter,n_iter+2*delta_iter):
+for dih_iter in range(n_dih_iter):
 	traj_file = "run.iter" + str(ib_iter) + ".out.dcd"
     	# run CG simulation
 	RunCGSim(ib_iter, equil_in_file, run_in_file)
@@ -1538,13 +1737,13 @@ for ib_iter in range(n_iter+delta_iter,n_iter+2*delta_iter):
 	UpdateDihedrals(ib_iter, atom_dihedral_potentials, atom_dihedral_start_stop, prev_cg_dihedral_potentials, prev_cg_dihedral_start_stop, cg_dihedral_potentials, cg_dihedral_start_stop)
     
         # update previous potentials
-        prev_cg_bond_potentials[:,:] = cg_bond_potentials[:,:]
-        prev_cg_bond_start_stop[:,:] = cg_bond_start_stop[:,:]
-        prev_cg_angle_potentials[:,:] = cg_angle_potentials[:,:]
-        prev_cg_angle_start_stop[:,:] = cg_angle_start_stop[:,:]
+        cg_bond_potentials[:,:] = prev_cg_bond_potentials[:,:] 
+        cg_bond_start_stop[:,:] = prev_cg_bond_start_stop[:,:] 
+        cg_angle_potentials[:,:] = prev_cg_angle_potentials[:,:]
+        cg_angle_start_stop[:,:] = prev_cg_angle_start_stop[:,:]
         prev_cg_dihedral_potentials[:,:] = cg_dihedral_potentials[:,:]
         prev_cg_dihedral_start_stop[:,:] = cg_dihedral_start_stop[:,:]
-        # mv ib files for angles and dihedrals
+        # mv ib files for bonds and angles
         command0 = "cp angle" + str(ib_iter) + ".ib angle" + str(ib_iter+1) + ".ib"
 	os.system(command0)
         command0 = "cp angle" + str(ib_iter) + ".ener angle" + str(ib_iter+1) + ".ener"
@@ -1557,4 +1756,7 @@ for ib_iter in range(n_iter+delta_iter,n_iter+2*delta_iter):
 	os.system(command0)
         command0 = "cp bond" + str(ib_iter) + ".start_stop bond" + str(ib_iter+1) + ".start_stop"
 	os.system(command0)
+        ib_iter += 1
+
+
 
