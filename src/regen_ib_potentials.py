@@ -80,12 +80,26 @@ def ParsePsfFile(psf_file):
 				bonds[bond].append(line[line_bond*16+8:line_bond*16+16])
 				same = "false"
 				if bond > 0:
-					for bond2 in range(bond):
-						if (atom_types[int(bonds[bond][0])-1] == atom_types[int(bonds[bond2][0])-1] and atom_types[int(bonds[bond][1])-1] == atom_types[int(bonds[bond2][1])-1]) or (atom_types[int(bonds[bond][0])-1] == atom_types[int(bonds[bond2][1])-1] and atom_types[int(bonds[bond][1])-1] == atom_types[int(bonds[bond2][0])-1]):
+					for bond2 in range(n_uniq_bonds):
+		                                # check to see if the opposite strand parameters also exist and add to histogram
+		                                if uniq_bond_atom_types[bond2][0][1] == "1":
+			                            type1 = uniq_bond_atom_types[bond2][0][0] + str(2)
+		                                else:
+			                            type1 = uniq_bond_atom_types[bond2][0][0] + str(1)
+		                                if uniq_bond_atom_types[bond2][1][1] == "1":
+			                            type2 = uniq_bond_atom_types[bond2][1][0] + str(2)
+		                                else:
+			                            type2 = uniq_bond_atom_types[bond2][1][0] + str(1)
+                                                # check if we already have this bond
+						if (atom_types[int(bonds[bond][0])-1] == uniq_bond_atom_types[bond2][0] and atom_types[int(bonds[bond][1])-1] == uniq_bond_atom_types[bond2][1]) or (atom_types[int(bonds[bond][0])-1] == uniq_bond_atom_types[bond2][1] and atom_types[int(bonds[bond][1])-1] == uniq_bond_atom_types[bond2][0]):
 							same = "true"
-							uniq_bond_num = bonds[bond2][2]
+							uniq_bond_num = bond2
 							break
-				if same == "false":
+						elif (atom_types[int(bonds[bond][0])-1] == type1 and atom_types[int(bonds[bond][1])-1] == type2) or (atom_types[int(bonds[bond][0])-1] == type2 and atom_types[int(bonds[bond][1])-1] == type1):
+							same = "true"
+							uniq_bond_num = bond2
+							break
+		                if same == "false":
 					uniq_bond_atom_types.append([])
 					uniq_bond_atom_types[n_uniq_bonds].append(atom_types[int(bonds[bond][0])-1])
 					uniq_bond_atom_types[n_uniq_bonds].append(atom_types[int(bonds[bond][1])-1])
@@ -104,10 +118,27 @@ def ParsePsfFile(psf_file):
 				angles[angle].append(line[line_angle*24+16:line_angle*24+24])
 				same = "false"
 				if angle > 0:
-					for angle2 in range(angle):
-						if (atom_types[int(angles[angle][0])-1] == atom_types[int(angles[angle2][0])-1] and atom_types[int(angles[angle][1])-1] == atom_types[int(angles[angle2][1])-1] and atom_types[int(angles[angle][2])-1] == atom_types[int(angles[angle2][2])-1]) or (atom_types[int(angles[angle][0])-1] == atom_types[int(angles[angle2][2])-1] and atom_types[int(angles[angle][1])-1] == atom_types[int(angles[angle2][1])-1] and atom_types[int(angles[angle][2])-1] == atom_types[int(angles[angle2][0])-1]):
+					for angle2 in range(n_uniq_angles):
+		                                # check to see if the opposite strand parameters also exist and add to histogram
+		                                if uniq_angle_atom_types[angle2][0][1] == "1":
+			                            type1 = uniq_angle_atom_types[angle2][0][0] + str(2)
+		                                else:
+			                            type1 = uniq_angle_atom_types[angle2][0][0] + str(1)
+		                                if uniq_angle_atom_types[angle2][1][1] == "1":
+			                            type2 = uniq_angle_atom_types[angle2][1][0] + str(2)
+		                                else:
+			                            type2 = uniq_angle_atom_types[angle2][1][0] + str(1)
+		                                if uniq_angle_atom_types[angle2][2][1] == "1":
+			                            type3 = uniq_angle_atom_types[angle2][2][0] + str(2)
+		                                else:
+			                            type3 = uniq_angle_atom_types[angle2][2][0] + str(1)
+						if (atom_types[int(angles[angle][0])-1] == uniq_angle_atom_types[angle2][0] and atom_types[int(angles[angle][1])-1] == uniq_angle_atom_types[angle2][1] and atom_types[int(angles[angle][2])-1] == uniq_angle_atom_types[angle2][2]) or (atom_types[int(angles[angle][0])-1] == uniq_angle_atom_types[angle2][2] and atom_types[int(angles[angle][1])-1] == uniq_angle_atom_types[angle2][1] and atom_types[int(angles[angle][2])-1] == uniq_angle_atom_types[angle2][0]):
 							same = "true"
-							uniq_angle_num = angles[angle2][3]
+							uniq_angle_num = angle2
+							break
+						elif (atom_types[int(angles[angle][0])-1] == type1 and atom_types[int(angles[angle][1])-1] == type2 and atom_types[int(angles[angle][2])-1] == type3) or (atom_types[int(angles[angle][0])-1] == type3 and atom_types[int(angles[angle][1])-1] == type2 and atom_types[int(angles[angle][2])-1] == type1):
+							same = "true"
+							uniq_angle_num = angle2
 							break
 				if same == "false":
 					uniq_angle_atom_types.append([])
@@ -129,10 +160,31 @@ def ParsePsfFile(psf_file):
 				dihedrals[dihedral].append(line[line_dihedral*32+24:line_dihedral*32+32])
 				same = "false"
 				if dihedral > 0:
-					for dihedral2 in range(dihedral):
-						if (atom_types[int(dihedrals[dihedral][0])-1] == atom_types[int(dihedrals[dihedral2][0])-1] and atom_types[int(dihedrals[dihedral][1])-1] == atom_types[int(dihedrals[dihedral2][1])-1] and atom_types[int(dihedrals[dihedral][2])-1] == atom_types[int(dihedrals[dihedral2][2])-1] and atom_types[int(dihedrals[dihedral][3])-1] == atom_types[int(dihedrals[dihedral2][3])-1]) or (atom_types[int(dihedrals[dihedral][0])-1] == atom_types[int(dihedrals[dihedral2][3])-1] and atom_types[int(dihedrals[dihedral][1])-1] == atom_types[int(dihedrals[dihedral2][2])-1] and atom_types[int(dihedrals[dihedral][2])-1] == atom_types[int(dihedrals[dihedral2][1])-1] and atom_types[int(dihedrals[dihedral][3])-1] == atom_types[int(dihedrals[dihedral2][0])-1]):
+					for dihedral2 in range(n_uniq_dihedrals):
+		                                # check to see if opposite signed strands exist and add to current histogram
+		                                if uniq_dihedral_atom_types[dihedral2][0][1] == "1":
+			                            type1 = uniq_dihedral_atom_types[dihedral2][0][0] + str(2)
+		                                else:
+			                            type1 = uniq_dihedral_atom_types[dihedral2][0][0] + str(1)
+		                                if uniq_dihedral_atom_types[dihedral2][1][1] == "1":
+			                            type2 = uniq_dihedral_atom_types[dihedral2][1][0] + str(2)
+		                                else:
+			                            type2 = uniq_dihedral_atom_types[dihedral2][1][0] + str(1)
+		                                if uniq_dihedral_atom_types[dihedral2][2][1] == "1":
+			                            type3 = uniq_dihedral_atom_types[dihedral2][2][0] + str(2)
+		                                else:
+			                            type3 = uniq_dihedral_atom_types[dihedral2][2][0] + str(1)
+		                                if uniq_dihedral_atom_types[dihedral2][3][1] == "1":
+			                            type4 = uniq_dihedral_atom_types[dihedral2][3][0] + str(2)
+		                                else:
+			                            type4 = uniq_dihedral_atom_types[dihedral2][3][0] + str(1)
+						if (atom_types[int(dihedrals[dihedral][0])-1] == uniq_dihedral_atom_types[dihedral2][0] and atom_types[int(dihedrals[dihedral][1])-1] == uniq_dihedral_atom_types[dihedral2][1] and atom_types[int(dihedrals[dihedral][2])-1] == uniq_dihedral_atom_types[dihedral2][2] and atom_types[int(dihedrals[dihedral][3])-1] == uniq_dihedral_atom_types[dihedral2][3]) or (atom_types[int(dihedrals[dihedral][0])-1] == uniq_dihedral_atom_types[dihedral2][3] and atom_types[int(dihedrals[dihedral][1])-1] == uniq_dihedral_atom_types[dihedral2][2] and atom_types[int(dihedrals[dihedral][2])-1] == uniq_dihedral_atom_types[dihedral2][1] and atom_types[int(dihedrals[dihedral][3])-1] == uniq_dihedral_atom_types[dihedral2][0]):
 							same = "true"
-							uniq_dihedral_num = dihedrals[dihedral2][4]
+							uniq_dihedral_num = dihedral2
+							break
+						elif (atom_types[int(dihedrals[dihedral][0])-1] == type1 and atom_types[int(dihedrals[dihedral][1])-1] == type2 and atom_types[int(dihedrals[dihedral][2])-1] == type3 and atom_types[int(dihedrals[dihedral][3])-1] == type4) or (atom_types[int(dihedrals[dihedral][0])-1] == type4 and atom_types[int(dihedrals[dihedral][1])-1] == type3 and atom_types[int(dihedrals[dihedral][2])-1] == type2 and atom_types[int(dihedrals[dihedral][3])-1] == type1):
+							same = "true"
+							uniq_dihedral_num = dihedral2
 							break
 				if same == "false":
 					uniq_dihedral_atom_types.append([])
@@ -254,7 +306,7 @@ print "Number of unique dihedrals:", n_uniq_dihedrals
 # declare bond, angle and dihedral potentials
 bond_min = 0.0
 bond_max = 24.0
-bond_delta = 0.1 
+bond_delta = 0.01 
 n_bond_bins  = int((bond_max-bond_min)/bond_delta)
 cg_bond_potentials = np.zeros((n_uniq_bonds,n_bond_bins),dtype=float)
 cg_bond_start_stop = np.empty((n_uniq_bonds,2),dtype=int)

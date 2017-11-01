@@ -22,7 +22,7 @@ dih_thresh = 1E-3 # this will make it pretty smooth
 degrees_to_radians = 3.1415926535/180.0
 # read the configuration file and populate the global variables
 def ParseConfigFile(cfg_file):
-	global top_file, atom_data_root, ib_lambda, n_bond_iter, n_angle_iter, n_dih_iter, lammpspar_file, kT, n_start, bond_delta, dihedral_delta, angle_delta, lammpstop_file, equil_steps, run_steps, temperature
+	global top_file, atom_data_root, ib_lambda, n_bond_iter, n_angle_iter, n_dih_iter, lammpspar_file, kT, n_start, bond_delta, dihedral_delta, angle_delta, lammpstop_file, equil_steps, run_steps, temperature, n_outer_iter
 	f = open(cfg_file)
         n_start = 0
         bond_delta = angle_delta = dihedral_delta = 0.0
@@ -63,6 +63,8 @@ def ParseConfigFile(cfg_file):
 				angle_delta = float(value)
 			elif option.lower()=='dihiterations':
 				n_dih_iter = int(value)
+			elif option.lower()=='outeriterations':
+				n_outer_iter = int(value)
 			elif option.lower()=='dihdedraldelta':
 				dihdedral_delta = float(value)
 			elif option.lower()=='restartnum':
@@ -793,9 +795,10 @@ def CreateAnglePotentials(angle_hists, angle_start_stop, angle_potentials, angle
 
 	n_angles = angle_hists.shape[0]
 	n_bins = angle_hists.shape[1]
+        fit_size = 4
         # declare and fill coefficient matrices
 	coeff_mat = np.empty((n_bins,3),dtype=float)
-        init_x = np.empty((3,3),dtype=float)
+        init_x = np.empty((fit_size,3),dtype=float)
 	x_mat = np.empty((n_bins),dtype=float)
 	sinx = np.empty((n_bins),dtype=float)
 	for i in range(n_bins):
@@ -835,74 +838,88 @@ def CreateAnglePotentials(angle_hists, angle_start_stop, angle_potentials, angle
                             angle_potentials[angle,i] = 0.0
                 # smooth the potential and compute forces
                 indice, = angle_potentials[angle,:].nonzero()
-                tck = interpolate.splrep(x_mat[indice],angle_potentials[angle,indice])
-                angle_potentials[angle,start:stop] = interpolate.splev(x_mat[start:stop], tck, der=0)
-                angle_forces[angle,start:stop] = -interpolate.splev(x_mat[start:stop], tck, der=1)
-                # trim the fat
-                if start > 0 or stop < n_bins:
-                    # make sure start is sloped appropriately
-                    while angle_forces[angle,start] < 0 or angle_forces[angle,start+1] < 0 or angle_forces[angle,start+2] < 0:
-                        start += 1
-                    # make sure end is sloped appropriately
-                    while angle_forces[angle,stop-1] > 0 or angle_forces[angle,stop-2] > 0 or angle_forces[angle,stop-3] > 0:
-                        stop -= 1
+                tck_indice = interpolate.splrep(x_mat[indice],angle_potentials[angle,indice],s=1)
+#                angle_potentials[angle,start:stop] = interpolate.splev(x_mat[start:stop], tck, der=0)
+#                angle_forces[angle,start:stop] = -interpolate.splev(x_mat[start:stop], tck, der=1)
+
+		# fit unsampled regions
+#		hole_flag = "false"
+#                fit_hole = "false"
+#                for i in range(start,stop):
+#
+#			if angle_potentials[angle,i] < ang_thresh and hole_flag == "false":
+#				hole_start = i
+#				hole_flag = "true"
+#                        elif angle_potentials[angle,i] > ang_thresh and hole_flag == "true":
+#				hole_stop = i
+#                                fit_hole = "true"
+#                                hole_flag = "false"
+#			
+#			# fit hole if identified
+#                        if fit_hole == "true":
+#                                if (hole_stop - hole_start) > fit_size:
+#                                    data_y = np.append(angle_potentials[angle,hole_start-fit_size:hole_start],angle_potentials[angle,hole_stop:hole_stop+fit_size])
+#                                    data_x = np.append(coeff_mat[hole_start-fit_size:hole_start], coeff_mat[hole_stop:hole_stop+fit_size], axis=0)
+#				    k, rss, rank, s = np.linalg.lstsq(data_x, data_y)
+#                                    while k[2] > 0 and hole_start-fit_size >= start and hole_stop+fit_size <= stop:
+#                                        hole_start -= 1
+#                                        hole_stop += 1
+#                                        data_y = np.append(angle_potentials[angle,hole_start-fit_size:hole_start],angle_potentials[angle,hole_stop:hole_stop+fit_size])
+#                                        data_x = np.append(coeff_mat[hole_start-fit_size:hole_start], coeff_mat[hole_stop:hole_stop+fit_size], axis=0)
+#				        k, rss, rank, s = np.linalg.lstsq(data_x, data_y)
+#                                    if hole_start-fit_size == start or hole_stop+fit_size == stop:
+#                                        print "Cannot fit hole in angle potential ", angle+1
+#                                        sys.exit()
+#				    # fill in hole
+#                                    for j in range(hole_start,hole_stop):
+#					angle_potentials[angle,j] = k[0]*coeff_mat[j,0] + k[1]*coeff_mat[j,1] + k[2]*coeff_mat[j,2]
+#                                else:
+#				    # smooth region with spline interpolation
+#                                    angle_potentials[angle,hole_start-fit_size:hole_stop+fit_size] = interpolate.splev(x_mat[hole_start-fit_size:hole_stop+fit_size], tck_indice, der=0)
+#                                # hole is filled
+#				fit_hole = "false"
+
+		# now smooth the potential using spline
+#                tck = interpolate.splrep(x_mat[start:stop],angle_potentials[angle,start:stop],s=1)
+                angle_potentials[angle,start:stop] = interpolate.splev(x_mat[start:stop], tck_indice, der=0)
+                angle_forces[angle,start:stop] = -interpolate.splev(x_mat[start:stop], tck_indice, der=1)
+                # check to see slopes are upwards at tails:
+                if start > 0:
+                    while np.amin(np.diff(angle_forces[angle,start:start+fit_size])) > 0:
+                            start += 1
+                if stop < n_bins:
+                    while np.amin(np.diff(angle_forces[angle,stop-fit_size:stop])) > 0:
+                            stop -= 1
+		# connect stop and start using periodicity of angle
+                data_y = np.append(angle_potentials[angle,stop-fit_size:stop], angle_potentials[angle,start:start+fit_size])
+                data_x = np.append(x_mat[stop-fit_size:stop], x_mat[start:start+fit_size]+180.0, axis=0)
+                tck = interpolate.splrep(data_x,data_y,s=1)
+                angle_potentials[angle,stop:n_bins] = interpolate.splev(x_mat[stop:n_bins], tck, der=0)
+                angle_potentials[angle,0:start] = interpolate.splev(x_mat[0:start]+180.0, tck, der=0)
+#                k[2] =  1.0
+#                start -= 1
+#                stop += 1
+#                while k[2] > 0 and start < stop:
+#                    start += 1
+#                    stop -= 1
+#                    for j in range(fit_size):
+#                        init_x[j,0] = 1.0
+#	            	init_x[j,1] = coeff_mat[start+j,1] + 180.0
+#	            	init_x[j,2] = init_x[j,1]*init_x[j,1]
+#                    data_y = np.append(angle_potentials[angle,stop-fit_size:stop], angle_potentials[angle,start:start+fit_size])
+#                    data_x = np.append(coeff_mat[stop-fit_size:stop], init_x[:], axis=0)
+#	            k, rss, rank, s = np.linalg.lstsq(data_x, data_y)
+#
+#		for j in range(stop,n_bins):
+#			angle_potentials[angle,j] = k[0]*coeff_mat[j,0] + k[1]*coeff_mat[j,1] + k[2]*coeff_mat[j,2]
+#		for j in range(start):
+#			x = coeff_mat[j,1]+180.0
+#			x2 = x*x
+#			angle_potentials[angle,j] = k[0] + k[1]*x + k[2]*x2
+
                 # save start stop
                 angle_start_stop[angle,0] = start
                 angle_start_stop[angle,1] = stop
-
-		# fit unsampled regions
-		hole_flag = "false"
-                fit_hole = "false"
-                for i in range(start,stop):
-
-			if angle_potentials[angle,i] < ang_thresh and hole_flag == "false":
-				hole_start = i
-				hole_flag = "true"
-                        elif angle_potentials[angle,i] > ang_thresh and hole_flag == "true":
-				hole_stop = i
-                                fit_hole = "true"
-                                hole_flag = "false"
-			
-			# fit hole if identified
-                        if fit_hole == "true":
-                                if (hole_stop - hole_start) > 3:
-                                    # make sure legs are sloped appropriately
-                                    while hole_start >= 2 and (angle_forces[angle,hole_start] > 0 or angle_forces[angle,hole_start-1] > 0 or angle_forces[angle,hole_start-2] > 0):
-                                        hole_start -= 1
-                                    while hole_stop < n_bins-3 and (angle_forces[angle,hole_stop] < 0 or angle_forces[angle,hole_stop+1] < 0 or angle_forces[angle,hole_stop+2] < 0):
-                                        hole_stop += 1
-                                    if hole_stop == n_bins-2 or hole_start < 2: # have to bridge
-                                        break
-                                    data_y = np.append(angle_potentials[angle,hole_start-3:hole_start],angle_potentials[angle,hole_stop:hole_stop+3])
-                                    data_x = np.append(coeff_mat[hole_start-3:hole_start], coeff_mat[hole_stop:hole_stop+3], axis=0)
-				    k, rss, rank, s = np.linalg.lstsq(data_x, data_y)
-				    # fill in hole
-                                    for j in range(hole_start,hole_stop):
-					angle_potentials[angle,j] = k[0]*coeff_mat[j,0] + k[1]*coeff_mat[j,1] + k[2]*coeff_mat[j,2]
-                                else:
-				    # smooth region with spline interpolation
-                                    tck = interpolate.splrep(x_mat[hole_start-3:hole_stop+3],angle_potentials[angle,hole_start-3:hole_stop+3])
-                                    angle_potentials[angle,hole_start-3:hole_stop+3] = interpolate.splev(x_mat[hole_start-3:hole_stop+3], tck, der=0)
-                                # hole is filled
-				fit_hole = "false"
-
-		# connect stop and start using periodicity of angle
-		# fit remaining missing data
-		for j in range(init_x.shape[0]):
-                        init_x[j,0] = 1.0
-			init_x[j,1] = coeff_mat[start+j,1] + 180.0
-			init_x[j,2] = init_x[j,1]*init_x[j,1]
-                data_y = np.append(angle_potentials[angle,stop-3:stop], angle_potentials[angle,start:start+3])
-                data_x = np.append(coeff_mat[stop-3:stop], init_x[:], axis=0)
-		k, rss, rank, s = np.linalg.lstsq(data_x, data_y)
-
-		for j in range(stop,n_bins):
-			angle_potentials[angle,j] = k[0]*coeff_mat[j,0] + k[1]*coeff_mat[j,1] + k[2]*coeff_mat[j,2]
-		for j in range(start):
-			x = angle_min+(j+0.5)*angle_delta+180.0
-			x2 = x*x
-			angle_potentials[angle,j] = k[0] + k[1]*x + k[2]*x2
-
 		# now smooth the potential using spline
                 min_val = np.amin(angle_potentials[angle,:])
                 tck = interpolate.splrep(x_mat,angle_potentials[angle,:]-min_val)
@@ -945,42 +962,29 @@ def AngleAsymptoticBehavior(angle_potential,angle_force,x_mat,start,stop):
 	n_bins = angle_potential.shape[0]
         # declare and fill coefficient matrices
 	coeff_mat = np.empty((n_bins,3),dtype=float)
-        init_x = np.empty((3,3),dtype=float)
+        fit_size = 2
+        init_x = np.empty((fit_size,3),dtype=float)
 	for i in range(n_bins):
 		coeff_mat[i,0] = 1.0
 		coeff_mat[i,1] = x_mat[i]
 		coeff_mat[i,2] = x_mat[i]*x_mat[i]
 
-        # trim the fat
-        if start > 0 or stop < n_bins:
-            # make sure start is sloped appropriately
-            while angle_force[start] < 0 or angle_force[start+1] < 0 or angle_force[start+2] < 0:
-                angle_potential[start] = 0.0
-                start += 1
-            # make sure end is sloped appropriately
-            while angle_force[stop-1] > 0 or angle_force[stop-2] > 0 or angle_force[stop-3] > 0:
-                angle_potential[stop] = 0.0
-                stop -= 1
-        # smooth the potential and compute forces
-        indice, = angle_potential.nonzero()
-        tck = interpolate.splrep(x_mat[indice],angle_potential[indice])
+	# now smooth the potential using spline
+        tck = interpolate.splrep(x_mat[start:stop],angle_potential[start:stop],s=1)
         angle_potential[start:stop] = interpolate.splev(x_mat[start:stop], tck, der=0)
         angle_force[start:stop] = -interpolate.splev(x_mat[start:stop], tck, der=1)
-	# fit remaining missing data
-	for j in range(init_x.shape[0]):
-                init_x[j,0] = 1.0
-		init_x[j,1] = coeff_mat[start+j,1] + 180.0
-		init_x[j,2] = init_x[j,1]*init_x[j,1]
-        data_y = np.append(angle_potential[stop-3:stop], angle_potential[start:start+3])
-        data_x = np.append(coeff_mat[stop-3:stop], init_x[:], axis=0)
-	k, rss, rank, s = np.linalg.lstsq(data_x, data_y)
-
-	for j in range(stop,n_bins):
-		angle_potential[j] = k[0]*coeff_mat[j,0] + k[1]*coeff_mat[j,1] + k[2]*coeff_mat[j,2]
-	for j in range(start):
-		x = angle_min+(j+0.5)*angle_delta+180.0
-		x2 = x*x
-		angle_potential[j] = k[0] + k[1]*x + k[2]*x2
+        # check to see slopes are upwards at tails:
+        if start > 0 or stop < n_bins-1:
+            while np.amin(np.diff(angle_force[start:start+fit_size])) > 0:
+                start += 1
+            while np.amin(np.diff(angle_force[stop-fit_size:stop])) > 0:
+                stop -= 1
+	# connect stop and start using periodicity of angle
+        data_y = np.append(angle_potential[stop-fit_size:stop], angle_potential[start:start+fit_size])
+        data_x = np.append(x_mat[stop-fit_size:stop], x_mat[start:start+fit_size]+180.0, axis=0)
+        tck = interpolate.splrep(data_x,data_y,s=1)
+        angle_potential[stop:n_bins] = interpolate.splev(x_mat[stop:n_bins], tck, der=0)
+        angle_potential[0:start] = interpolate.splev(x_mat[0:start]+180.0, tck, der=0)
 
 	# now smooth the potential using spline
         min_val = np.amin(angle_potential)
@@ -1094,9 +1098,10 @@ def CreateDihedralPotentials(dihedral_hists, dihedral_start_stop, dihedral_poten
 
 	n_dihedrals = dihedral_hists.shape[0]
 	n_bins = dihedral_hists.shape[1]
+        fit_size = 3
         # declare and fill coefficient matrices
 	coeff_mat = np.empty((n_bins,3),dtype=float)
-        init_x = np.empty((3,3),dtype=float)
+        init_x = np.empty((fit_size,3),dtype=float)
 	x_mat = np.empty((n_bins),dtype=float)
 	for i in range(n_bins):
 		x = dihedral_min+(i+0.5)*dihedral_delta
@@ -1134,78 +1139,66 @@ def CreateDihedralPotentials(dihedral_hists, dihedral_start_stop, dihedral_poten
                             dihedral_potentials[dihedral,i] = 0.0
                 # smooth the potential and compute forces
                 indice, = dihedral_potentials[dihedral,:].nonzero()
-                tck = interpolate.splrep(x_mat[indice],dihedral_potentials[dihedral,indice],s=1)
-                dihedral_potentials[dihedral,start:stop] = interpolate.splev(x_mat[start:stop], tck, der=0)
-                dihedral_forces[dihedral,start:stop] = -interpolate.splev(x_mat[start:stop], tck, der=1)
-                # trim the fat
-                if start > 0 or stop < n_bins:
-                    # make sure start is sloped appropriately
-                    while dihedral_forces[dihedral,start] < 0 or dihedral_forces[dihedral,start+1] < 0 or dihedral_forces[dihedral,start+2] < 0:
-                        start += 1
-                    # make sure end is sloped appropriately
-                    while dihedral_forces[dihedral,stop-1] > 0 or dihedral_forces[dihedral,stop-2] > 0 or dihedral_forces[dihedral,stop-3] > 0:
-                        stop -= 1
-                # save start stop
-                dihedral_start_stop[dihedral,0] = start
-                dihedral_start_stop[dihedral,1] = stop
+                tck_indice = interpolate.splrep(x_mat[indice],dihedral_potentials[dihedral,indice],s=1)
+                dihedral_forces[dihedral,start:stop] = -interpolate.splev(x_mat[start:stop], tck_indice, der=1)
+                dihedral_potentials[dihedral,start:stop] = interpolate.splev(x_mat[start:stop], tck_indice, der=0)
 
 		# fit unsampled regions
 		hole_flag = "false"
                 fit_hole = "false"
-                for i in range(start,stop):
+#                for i in range(start,stop):
+#
+#			if dihedral_potentials[dihedral,i] < dih_thresh and hole_flag == "false":
+#				hole_start = i
+#				hole_flag = "true"
+#                        elif dihedral_potentials[dihedral,i] > dih_thresh and hole_flag == "true":
+#				hole_stop = i
+#                                fit_hole = "true"
+#                                hole_flag = "false"
+#			
+#			# fit hole if identified
+#                        if fit_hole == "true":
+#                                if (hole_stop - hole_start) > fit_size:
+#                                    # make sure legs are sloped appropriately
+#                                    while np.amin(np.diff(dihedral_forces[dihedral,hole_start-fit_size:hole_start])) > 0:
+#                                        hole_start -= 1
+#                                    while np.amin(np.diff(dihedral_forces[dihedral,hole_stop:hole_stop+fit_size])) > 0:
+#                                        hole_stop += 1
+#                                    data_y = np.append(dihedral_potentials[dihedral,hole_start-fit_size:hole_start],dihedral_potentials[dihedral,hole_stop:hole_stop+fit_size])
+#                                    data_x = np.append(coeff_mat[hole_start-fit_size:hole_start], coeff_mat[hole_stop:hole_stop+fit_size], axis=0)
+#				    k, rss, rank, s = np.linalg.lstsq(data_x, data_y)
+#				    # fill in hole
+#                                    for j in range(hole_start,hole_stop):
+#					dihedral_potentials[dihedral,j] = k[0]*coeff_mat[j,0] + k[1]*coeff_mat[j,1] + k[2]*coeff_mat[j,2]
+#                                else:
+#                                    dihedral_potentials[dihedral,hole_start:hole_stop] = interpolate.splev(x_mat[hole_start:hole_stop], tck_indice, der=0)
+#                                # hole is filled
+#				fit_hole = "false"
 
-			if dihedral_potentials[dihedral,i] < dih_thresh and hole_flag == "false":
-				hole_start = i
-				hole_flag = "true"
-                        elif dihedral_potentials[dihedral,i] > dih_thresh and hole_flag == "true":
-				hole_stop = i
-                                fit_hole = "true"
-                                hole_flag = "false"
-			
-			# fit hole if identified
-                        if fit_hole == "true":
-                                if (hole_stop - hole_start) > 3:
-                                    # make sure legs are sloped appropriately
-                                    while hole_start > 2 and (dihedral_forces[dihedral,hole_start] > 0 or dihedral_forces[dihedral,hole_start-1] > 0 or dihedral_forces[dihedral,hole_start-2] > 0):
-                                        hole_start -= 1
-                                    while hole_stop < n_bins-3 and (dihedral_forces[dihedral,hole_stop] < 0 or dihedral_forces[dihedral,hole_stop+1] < 0 or dihedral_forces[dihedral,hole_stop+2] < 0):
-                                        hole_stop += 1
-                                    if hole_stop == n_bins-3 or hole_start ==2:
-                                        break
-                                    data_y = np.append(dihedral_potentials[dihedral,hole_start-3:hole_start],dihedral_potentials[dihedral,hole_stop:hole_stop+3])
-                                    data_x = np.append(coeff_mat[hole_start-3:hole_start], coeff_mat[hole_stop:hole_stop+3], axis=0)
-				    k, rss, rank, s = np.linalg.lstsq(data_x, data_y)
-				    # fill in hole
-                                    for j in range(hole_start,hole_stop):
-					dihedral_potentials[dihedral,j] = k[0]*coeff_mat[j,0] + k[1]*coeff_mat[j,1] + k[2]*coeff_mat[j,2]
-                                else:
-				    # smooth region with linear interpolation
-                                    k, rss, rank, s = np.linalg.lstsq(coeff_mat[hole_start-3:hole_stop+3,0:2],dihedral_potentials[dihedral,hole_start-3:hole_stop+3])
-				    # fill in hole
-                                    for j in range(hole_start,hole_stop):
-					dihedral_potentials[dihedral,j] = k[0]*coeff_mat[j,0] + k[1]*coeff_mat[j,1] 
-
-#                                    tck = interpolate.splrep(x_mat[hole_start-3:hole_stop+3],dihedral_potentials[dihedral,hole_start-3:hole_stop+3])
-#                                    dihedral_potentials[dihedral,hole_start-3:hole_stop+3] = interpolate.splev(x_mat[hole_start-3:hole_stop+3], tck, der=0)
-                                # hole is filled
-				fit_hole = "false"
-
+                # check to see slopes are upwards at tails:
+                if start > 0 or stop < n_bins:
+                    while np.amin(np.diff(dihedral_forces[dihedral,start:start+fit_size])) > 0:
+                            start += 1
+                    while np.amin(np.diff(dihedral_forces[dihedral,stop-fit_size:stop])) > 0:
+                            stop -= 1
 		# connect stop and start using periodicity of dihedral
-		# fit remaining missing data
-		for j in range(init_x.shape[0]):
-                        init_x[j,0] = 1.0
-			init_x[j,1] = coeff_mat[start+j,1] + 360.0
-			init_x[j,2] = init_x[j,1]*init_x[j,1]
-                data_y = np.append(dihedral_potentials[dihedral,stop-3:stop], dihedral_potentials[dihedral,start:start+3])
-                data_x = np.append(coeff_mat[stop-3:stop], init_x[:], axis=0)
-		k, rss, rank, s = np.linalg.lstsq(data_x, data_y)
+                data_y = np.append(dihedral_potentials[dihedral,stop-fit_size:stop], dihedral_potentials[dihedral,start:start+fit_size])
+                data_x = np.append(x_mat[stop-fit_size:stop], x_mat[start:start+fit_size]+360.0, axis=0)
+                tck = interpolate.splrep(data_x,data_y,s=1)
+                dihedral_potentials[dihedral,stop:n_bins] = interpolate.splev(x_mat[stop:n_bins], tck, der=0)
+                dihedral_potentials[dihedral,0:start] = interpolate.splev(x_mat[0:start]+360.0, tck, der=0)
+#		k, rss, rank, s = np.linalg.lstsq(data_x, data_y)
+#
+#		for j in range(stop,n_bins):
+#			dihedral_potentials[dihedral,j] = k[0]*coeff_mat[j,0] + k[1]*coeff_mat[j,1] + k[2]*coeff_mat[j,2]
+#		for j in range(start):
+#			x = coeff_mat[j,1]+360.0
+#			x2 = x*x
+#			dihedral_potentials[dihedral,j] = k[0] + k[1]*x + k[2]*x2
 
-		for j in range(stop,n_bins):
-			dihedral_potentials[dihedral,j] = k[0]*coeff_mat[j,0] + k[1]*coeff_mat[j,1] + k[2]*coeff_mat[j,2]
-		for j in range(start):
-			x = dihedral_min+(j+0.5)*dihedral_delta+360.0
-			x2 = x*x
-			dihedral_potentials[dihedral,j] = k[0] + k[1]*x + k[2]*x2
+                # save start stop
+                dihedral_start_stop[dihedral,0] = start
+                dihedral_start_stop[dihedral,1] = stop
 
 		# now smooth the potential using spline
                 min_val = np.amin(dihedral_potentials[dihedral,:])
@@ -1260,46 +1253,27 @@ def UpdateDihedrals(ib_iter, atom_dihedral_potentials, atom_dihedral_start_stop,
 def DihedralAsymptoticBehavior(dihedral_potential,dihedral_force,x_mat,start,stop):
 
 	n_bins = dihedral_potential.shape[0]
-        # declare and fill coefficient matrices
-	coeff_mat = np.empty((n_bins,3),dtype=float)
-        init_x = np.empty((3,3),dtype=float)
-	for i in range(n_bins):
-		coeff_mat[i,0] = 1.0
-		coeff_mat[i,1] = x_mat[i]
-		coeff_mat[i,2] = x_mat[i]*x_mat[i]
+        fit_size = 3
 
-        # trim the fat
-        if start > 0 or stop < n_bins:
-            # make sure start is sloped appropriately
-            while dihedral_force[start] < 0 or dihedral_force[start+1] < 0 or dihedral_force[start+2] < 0:
-                dihedral_potential[start] = 0.0
-                start += 1
-            # make sure end is sloped appropriately
-            while dihedral_force[stop-1] > 0 or dihedral_force[stop-2] > 0 or dihedral_force[stop-3] > 0:
-                dihedral_potential[stop] = 0.0
-                stop -= 1
         # smooth the potential and compute forces
         indice, = dihedral_potential.nonzero()
-        tck = interpolate.splrep(x_mat[indice],dihedral_potential[indice])
+        tck = interpolate.splrep(x_mat[indice],dihedral_potential[indice],s=1)
         dihedral_potential[start:stop] = interpolate.splev(x_mat[start:stop], tck, der=0)
         dihedral_force[start:stop] = -interpolate.splev(x_mat[start:stop], tck, der=1)
-	# fit remaining missing data
-	for j in range(init_x.shape[0]):
-                init_x[j,0] = 1.0
-		init_x[j,1] = coeff_mat[start+j,1] + 360.0
-		init_x[j,2] = init_x[j,1]*init_x[j,1]
-        data_y = np.append(dihedral_potential[stop-3:stop], dihedral_potential[start:start+3])
-        data_x = np.append(coeff_mat[stop-3:stop], init_x[:], axis=0)
-	k, rss, rank, s = np.linalg.lstsq(data_x, data_y)
+        # check to see slopes are upwards at tails:
+        if start > 0 or stop < n_bins:
+            while np.amin(np.diff(dihedral_force[start+fit_size])) > 0:
+                    start += 1
+            while np.amin(np.diff(dihedral_force[stop-fit_size:stop])) > 0:
+                    stop -= 1
+	# fit tails using periodicity of dihedral 
+        data_y = np.append(dihedral_potential[stop-fit_size:stop], dihedral_potentials[start:start+fit_size])
+        data_x = np.append(x_mat[stop-fit_size:stop], x_mat[start:start+fit_size]+360.0, axis=0)
+        tck = interpolate.splrep(data_x,data_y,s=1)
+        dihedral_potential[stop:n_bins] = interpolate.splev(x_mat[stop:n_bins], tck, der=0)
+        dihedral_potential[0:start] = interpolate.splev(x_mat[0:start]+360.0, tck, der=0)
 
-	for j in range(stop,n_bins):
-		dihedral_potential[j] = k[0]*coeff_mat[j,0] + k[1]*coeff_mat[j,1] + k[2]*coeff_mat[j,2]
-	for j in range(start):
-		x = dihedral_min+(j+0.5)*dihedral_delta+360.0
-		x2 = x*x
-		dihedral_potential[j] = k[0] + k[1]*x + k[2]*x2
-
-	# now smooth the potential using spline
+	# now smooth the total potential using spline and compute forces
         min_val = np.amin(dihedral_potential)
         tck = interpolate.splrep(x_mat,dihedral_potential-min_val)
         dihedral_potential[:] = interpolate.splev(x_mat, tck, der=0)
@@ -1535,7 +1509,7 @@ def create_equil_file(equil_file_name, equil_steps, lammpstop_file, lammpspar_fi
     equil_file.close()
 
 # run CG simulation using lammps
-def RunCGSim(ib_iter, equil_in_file, run_in_file):
+def RunCGSim(ib_iter):
         global temperature, equil_steps, run_steps, lammpstop_file, lammpspar_file, n_bond_bins, n_angle_bins, n_dihedral_bins
 	
 	new_equil_file = "equil.iter" + str(ib_iter) + ".in"
@@ -1549,10 +1523,10 @@ def RunCGSim(ib_iter, equil_in_file, run_in_file):
         command1 = "cp angle" + str(ib_iter) + ".ib angles.ib"
         command2 = "cp dihedral" + str(ib_iter) + ".ib dihedrals.ib"
         # update equil file and run
-	command3 = "sed -e s/NUM/" + str(ib_iter) + "/ < " + equil_in_file + " > " +  new_equil_file
+#	command3 = "sed -e s/NUM/" + str(ib_iter) + "/ < " + equil_in_file + " > " +  new_equil_file
 	command4 = "mpirun -np 4 lmp_mpi -i " + new_equil_file + " > " + equil_log_file
         # update run file and run
-	command5 = "sed -e s/NUM/" + str(ib_iter) + "/ < " + run_in_file + " > " +  new_run_file
+#	command5 = "sed -e s/NUM/" + str(ib_iter) + "/ < " + run_in_file + " > " +  new_run_file
 	command6 = "mpirun -np 4 lmp_mpi -i " + new_run_file + " > " + run_log_file
 	
 	print command0
@@ -1570,6 +1544,117 @@ def RunCGSim(ib_iter, equil_in_file, run_in_file):
 	print command6
 	os.system(command6)
 	print "Done with CG simulation for iteration", ib_iter
+
+
+def PerformDihIB(n_dih_iter, ib_iter):
+    global top_file, cg_bond_potentials, cg_bond_start_stop, cg_angle_potentials, cg_angle_start_stop, cg_dihedral_potentials, cg_dihedral_start_stop, atom_dihedral_potentials, atom_dihedral_start_stop, prev_cg_dihedral_potentials, prev_cg_dihedral_start_stop, prev_cg_bond_potentials, prev_cg_bond_start_stop, prev_cg_angle_potentials, prev_cg_angle_start_stop
+    # run dihedral IB
+    for dih_iter in range(n_dih_iter):
+	traj_file = "run.iter" + str(ib_iter) + ".out.dcd"
+    	# run CG simulation
+	RunCGSim(ib_iter)
+
+	# compute CG probability distributions
+	AnalyzeCGTraj(top_file, traj_file,cg_bond_potentials, cg_bond_start_stop, cg_angle_potentials, cg_angle_start_stop, cg_dihedral_potentials, cg_dihedral_start_stop)
+
+	# update potentials
+	UpdateDihedrals(ib_iter, atom_dihedral_potentials, atom_dihedral_start_stop, prev_cg_dihedral_potentials, prev_cg_dihedral_start_stop, cg_dihedral_potentials, cg_dihedral_start_stop)
+    
+        # update previous potentials
+        cg_bond_potentials[:,:] = prev_cg_bond_potentials[:,:] 
+        cg_bond_start_stop[:,:] = prev_cg_bond_start_stop[:,:] 
+        cg_angle_potentials[:,:] = prev_cg_angle_potentials[:,:]
+        cg_angle_start_stop[:,:] = prev_cg_angle_start_stop[:,:]
+        prev_cg_dihedral_potentials[:,:] = cg_dihedral_potentials[:,:]
+        prev_cg_dihedral_start_stop[:,:] = cg_dihedral_start_stop[:,:]
+        # mv ib files for bonds and angles
+        command0 = "cp angle" + str(ib_iter) + ".ib angle" + str(ib_iter+1) + ".ib"
+	os.system(command0)
+        command0 = "cp angle" + str(ib_iter) + ".ener angle" + str(ib_iter+1) + ".ener"
+	os.system(command0)
+        command0 = "cp angle" + str(ib_iter) + ".start_stop angle" + str(ib_iter+1) + ".start_stop"
+	os.system(command0)
+        command0 = "cp bond" + str(ib_iter) + ".ib bond" + str(ib_iter+1) + ".ib"
+	os.system(command0)
+        command0 = "cp bond" + str(ib_iter) + ".ener bond" + str(ib_iter+1) + ".ener"
+	os.system(command0)
+        command0 = "cp bond" + str(ib_iter) + ".start_stop bond" + str(ib_iter+1) + ".start_stop"
+	os.system(command0)
+        ib_iter += 1
+
+
+def PerformAngleIB(n_angle_iter, ib_iter):
+    global top_file, cg_bond_potentials, cg_bond_start_stop, cg_angle_potentials, cg_angle_start_stop, cg_dihedral_potentials, cg_dihedral_start_stop, atom_angle_potentials, atom_angle_start_stop, prev_cg_dihedral_potentials, prev_cg_dihedral_start_stop, prev_cg_bond_potentials, prev_cg_bond_start_stop, prev_cg_angle_potentials, prev_cg_angle_start_stop
+    # run angle IB
+    for angle_iter in range(n_angle_iter):
+	traj_file = "run.iter" + str(ib_iter) + ".out.dcd"
+    	# run CG simulation
+	RunCGSim(ib_iter)
+
+	# compute CG probability distributions
+	AnalyzeCGTraj(top_file, traj_file,cg_bond_potentials, cg_bond_start_stop, cg_angle_potentials, cg_angle_start_stop, cg_dihedral_potentials, cg_dihedral_start_stop)
+
+	# update potentials
+	UpdateAngles(ib_iter, atom_angle_potentials, atom_angle_start_stop, prev_cg_angle_potentials, prev_cg_angle_start_stop, cg_angle_potentials, cg_angle_start_stop)
+    
+        # update previous potentials
+        cg_bond_potentials[:,:] = prev_cg_bond_potentials[:,:]
+        cg_bond_start_stop[:,:] = prev_cg_bond_start_stop[:,:] 
+        prev_cg_angle_potentials[:,:] = cg_angle_potentials[:,:]
+        prev_cg_angle_start_stop[:,:] = cg_angle_start_stop[:,:]
+        cg_dihedral_potentials[:,:] = prev_cg_dihedral_potentials[:,:]
+        cg_dihedral_start_stop[:,:] = prev_cg_dihedral_start_stop[:,:]
+        # mv ib files for bonds and dihedrals
+        command0 = "cp bond" + str(ib_iter) + ".ib bond" + str(ib_iter+1) + ".ib"
+	os.system(command0)
+        command0 = "cp bond" + str(ib_iter) + ".ener bond" + str(ib_iter+1) + ".ener"
+	os.system(command0)
+        command0 = "cp bond" + str(ib_iter) + ".start_stop bond" + str(ib_iter+1) + ".start_stop"
+	os.system(command0)
+        command0 = "cp dihedral" + str(ib_iter) + ".ib dihedral" + str(ib_iter+1) + ".ib"
+	os.system(command0)
+        command0 = "cp dihedral" + str(ib_iter) + ".ener dihedral" + str(ib_iter+1) + ".ener"
+	os.system(command0)
+        command0 = "cp dihedral" + str(ib_iter) + ".start_stop dihedral" + str(ib_iter+1) + ".start_stop"
+	os.system(command0)
+        ib_iter += 1
+
+def PerformBondIB(n_bond_iter, ib_iter):
+    global top_file, cg_bond_potentials, cg_bond_start_stop, cg_angle_potentials, cg_angle_start_stop, cg_dihedral_potentials, cg_dihedral_start_stop, atom_bond_potentials, atom_bond_start_stop, prev_cg_dihedral_potentials, prev_cg_dihedral_start_stop, prev_cg_bond_potentials, prev_cg_bond_start_stop, prev_cg_angle_potentials, prev_cg_angle_start_stop
+    # run bond IB
+    for bond_iter in range(n_bond_iter):
+	traj_file = "run.iter" + str(ib_iter) + ".out.dcd"
+    	# run CG simulation
+        RunCGSim(ib_iter)
+        # compute CG probability distributions
+	AnalyzeCGTraj(top_file, traj_file,cg_bond_potentials, cg_bond_start_stop, cg_angle_potentials, cg_angle_start_stop, cg_dihedral_potentials, cg_dihedral_start_stop)
+
+	# update potentials
+	UpdateBonds(ib_iter, atom_bond_potentials, atom_bond_start_stop, prev_cg_bond_potentials, prev_cg_bond_start_stop, cg_bond_potentials, cg_bond_start_stop)
+    
+        # update previous potentials
+        prev_cg_bond_potentials[:,:] = cg_bond_potentials[:,:]
+        prev_cg_bond_start_stop[:,:] = cg_bond_start_stop[:,:]
+        cg_angle_potentials[:,:] = prev_cg_angle_potentials[:,:]
+        cg_angle_start_stop[:,:] = prev_cg_angle_start_stop[:,:]
+        cg_dihedral_potentials[:,:] = prev_cg_dihedral_potentials[:,:]
+        cg_dihedral_start_stop[:,:] = prev_cg_dihedral_start_stop[:,:]
+        # mv ib files for angles and dihedrals
+        command0 = "cp angle" + str(ib_iter) + ".ib angle" + str(ib_iter+1) + ".ib"
+	os.system(command0)
+        command0 = "cp angle" + str(ib_iter) + ".ener angle" + str(ib_iter+1) + ".ener"
+	os.system(command0)
+        command0 = "cp angle" + str(ib_iter) + ".start_stop angle" + str(ib_iter+1) + ".start_stop"
+	os.system(command0)
+        command0 = "cp dihedral" + str(ib_iter) + ".ib dihedral" + str(ib_iter+1) + ".ib"
+	os.system(command0)
+        command0 = "cp dihedral" + str(ib_iter) + ".ener dihedral" + str(ib_iter+1) + ".ener"
+	os.system(command0)
+        command0 = "cp dihedral" + str(ib_iter) + ".start_stop dihedral" + str(ib_iter+1) + ".start_stop"
+	os.system(command0)
+        ib_iter += 1
+
+
 
 #############################################################################################################################################################
 ####################################################              MAIN PROGRAM               ################################################################
@@ -1646,117 +1731,10 @@ if n_start > 0:
     ReadRestartPotentials(prev_cg_angle_potentials, prev_cg_angle_start_stop, angle_min, angle_delta, n_start, "angle")
     ReadRestartPotentials(prev_cg_dihedral_potentials, prev_cg_dihedral_start_stop, dihedral_min, dihedral_delta, n_start, "dihedral")
 
-equil_in_file = "equil.TEMPLATE.in"
-run_in_file = "run.TEMPLATE.in"
-
 ib_iter = n_start
-# run bond IB
-for bond_iter in range(n_bond_iter):
-	traj_file = "run.iter" + str(ib_iter) + ".out.dcd"
-    	# run CG simulation
-#        if bond_iter > -1:
-        RunCGSim(ib_iter, equil_in_file, run_in_file)
-        # compute CG probability distributions
-	AnalyzeCGTraj(top_file, traj_file,cg_bond_potentials, cg_bond_start_stop, cg_angle_potentials, cg_angle_start_stop, cg_dihedral_potentials, cg_dihedral_start_stop)
-#        else:
-#            ReadRestartHists(cg_bond_potentials, cg_bond_start_stop, bond_min, bond_delta, n_start, "bond")
-#            ReadRestartHists(cg_angle_potentials, cg_angle_start_stop, angle_min, angle_delta, n_start, "angle")
-#            ReadRestartHists(cg_dihedral_potentials, cg_dihedral_start_stop, dihedral_min, dihedral_delta, n_start, "dihedral")
-
-
-	# update potentials
-	UpdateBonds(ib_iter, atom_bond_potentials, atom_bond_start_stop, prev_cg_bond_potentials, prev_cg_bond_start_stop, cg_bond_potentials, cg_bond_start_stop)
-    
-        # update previous potentials
-        prev_cg_bond_potentials[:,:] = cg_bond_potentials[:,:]
-        prev_cg_bond_start_stop[:,:] = cg_bond_start_stop[:,:]
-        cg_angle_potentials[:,:] = prev_cg_angle_potentials[:,:]
-        cg_angle_start_stop[:,:] = prev_cg_angle_start_stop[:,:]
-        cg_dihedral_potentials[:,:] = prev_cg_dihedral_potentials[:,:]
-        cg_dihedral_start_stop[:,:] = prev_cg_dihedral_start_stop[:,:]
-        # mv ib files for angles and dihedrals
-        command0 = "cp angle" + str(ib_iter) + ".ib angle" + str(ib_iter+1) + ".ib"
-	os.system(command0)
-        command0 = "cp angle" + str(ib_iter) + ".ener angle" + str(ib_iter+1) + ".ener"
-	os.system(command0)
-        command0 = "cp angle" + str(ib_iter) + ".start_stop angle" + str(ib_iter+1) + ".start_stop"
-	os.system(command0)
-        command0 = "cp dihedral" + str(ib_iter) + ".ib dihedral" + str(ib_iter+1) + ".ib"
-	os.system(command0)
-        command0 = "cp dihedral" + str(ib_iter) + ".ener dihedral" + str(ib_iter+1) + ".ener"
-	os.system(command0)
-        command0 = "cp dihedral" + str(ib_iter) + ".start_stop dihedral" + str(ib_iter+1) + ".start_stop"
-	os.system(command0)
-        ib_iter += 1
-
-# run angle IB
-for angle_iter in range(n_angle_iter):
-	traj_file = "run.iter" + str(ib_iter) + ".out.dcd"
-    	# run CG simulation
-	RunCGSim(ib_iter, equil_in_file, run_in_file)
-
-	# compute CG probability distributions
-	AnalyzeCGTraj(top_file, traj_file,cg_bond_potentials, cg_bond_start_stop, cg_angle_potentials, cg_angle_start_stop, cg_dihedral_potentials, cg_dihedral_start_stop)
-
-	# update potentials
-	UpdateAngles(ib_iter, atom_angle_potentials, atom_angle_start_stop, prev_cg_angle_potentials, prev_cg_angle_start_stop, cg_angle_potentials, cg_angle_start_stop)
-    
-        # update previous potentials
-        cg_bond_potentials[:,:] = prev_cg_bond_potentials[:,:]
-        cg_bond_start_stop[:,:] = prev_cg_bond_start_stop[:,:] 
-        prev_cg_angle_potentials[:,:] = cg_angle_potentials[:,:]
-        prev_cg_angle_start_stop[:,:] = cg_angle_start_stop[:,:]
-        cg_dihedral_potentials[:,:] = prev_cg_dihedral_potentials[:,:]
-        cg_dihedral_start_stop[:,:] = prev_cg_dihedral_start_stop[:,:]
-        # mv ib files for bonds and dihedrals
-        command0 = "cp bond" + str(ib_iter) + ".ib bond" + str(ib_iter+1) + ".ib"
-	os.system(command0)
-        command0 = "cp bond" + str(ib_iter) + ".ener bond" + str(ib_iter+1) + ".ener"
-	os.system(command0)
-        command0 = "cp bond" + str(ib_iter) + ".start_stop bond" + str(ib_iter+1) + ".start_stop"
-	os.system(command0)
-        command0 = "cp dihedral" + str(ib_iter) + ".ib dihedral" + str(ib_iter+1) + ".ib"
-	os.system(command0)
-        command0 = "cp dihedral" + str(ib_iter) + ".ener dihedral" + str(ib_iter+1) + ".ener"
-	os.system(command0)
-        command0 = "cp dihedral" + str(ib_iter) + ".start_stop dihedral" + str(ib_iter+1) + ".start_stop"
-	os.system(command0)
-        ib_iter += 1
-
-
-# run dihedral IB
-for dih_iter in range(n_dih_iter):
-	traj_file = "run.iter" + str(ib_iter) + ".out.dcd"
-    	# run CG simulation
-	RunCGSim(ib_iter, equil_in_file, run_in_file)
-
-	# compute CG probability distributions
-	AnalyzeCGTraj(top_file, traj_file,cg_bond_potentials, cg_bond_start_stop, cg_angle_potentials, cg_angle_start_stop, cg_dihedral_potentials, cg_dihedral_start_stop)
-
-	# update potentials
-	UpdateDihedrals(ib_iter, atom_dihedral_potentials, atom_dihedral_start_stop, prev_cg_dihedral_potentials, prev_cg_dihedral_start_stop, cg_dihedral_potentials, cg_dihedral_start_stop)
-    
-        # update previous potentials
-        cg_bond_potentials[:,:] = prev_cg_bond_potentials[:,:] 
-        cg_bond_start_stop[:,:] = prev_cg_bond_start_stop[:,:] 
-        cg_angle_potentials[:,:] = prev_cg_angle_potentials[:,:]
-        cg_angle_start_stop[:,:] = prev_cg_angle_start_stop[:,:]
-        prev_cg_dihedral_potentials[:,:] = cg_dihedral_potentials[:,:]
-        prev_cg_dihedral_start_stop[:,:] = cg_dihedral_start_stop[:,:]
-        # mv ib files for bonds and angles
-        command0 = "cp angle" + str(ib_iter) + ".ib angle" + str(ib_iter+1) + ".ib"
-	os.system(command0)
-        command0 = "cp angle" + str(ib_iter) + ".ener angle" + str(ib_iter+1) + ".ener"
-	os.system(command0)
-        command0 = "cp angle" + str(ib_iter) + ".start_stop angle" + str(ib_iter+1) + ".start_stop"
-	os.system(command0)
-        command0 = "cp bond" + str(ib_iter) + ".ib bond" + str(ib_iter+1) + ".ib"
-	os.system(command0)
-        command0 = "cp bond" + str(ib_iter) + ".ener bond" + str(ib_iter+1) + ".ener"
-	os.system(command0)
-        command0 = "cp bond" + str(ib_iter) + ".start_stop bond" + str(ib_iter+1) + ".start_stop"
-	os.system(command0)
-        ib_iter += 1
-
-
+# perform IB:
+for outer_iter in range(n_outer_iter):
+    PerformBondIB(n_bond_iter, ib_iter)
+    PerformAngleIB(n_angle_iter, ib_iter)
+    PerformDihIB(n_dih_iter, ib_iter)
 
